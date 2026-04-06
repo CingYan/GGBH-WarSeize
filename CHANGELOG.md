@@ -16,6 +16,13 @@
 - `SchoolWar.SchoolWarClear` hook：偵測宗門戰結束（batch #2）
 - `DramaFunction.ArrestNpcCondition` hook（備用覆寫機制）
 
+### Removed
+- 挑釁物道具及相關奇遇（改由 DLL 自動觸發宗門戰）
+- 滅宗判定奇遇（不再需要手動觸發）
+
+### Known Issues
+- 門主（宗主）戰死後被遊戲從 `allUnit` 移除，無法復活或處置
+
 ### Technical Notes
 - Il2Cpp 環境下 Harmony postfix 不可靠，全部使用 prefix
 - 劇情內部跳轉不經過 `DramaTool.OpenDrama`，需用 code 控制序列
@@ -32,4 +39,3 @@
 ### Added
 - 初始版本
 - 基於原版「鬼畜灭宗（功能性模组—公开版）」
-- 純劇情編輯器實現

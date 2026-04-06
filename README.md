@@ -4,8 +4,6 @@
 
 > 基於原版「[鬼畜灭宗（功能性模组—公开版）](https://steamcommunity.com/sharedfiles/filedetails/?id=3438149783)」二次開發，加入 **DLL 代碼注入** 實現全自動化流程。
 
-![preview](ModProjectPreview.png)
-
 ---
 
 ## ✨ 功能特色
@@ -26,10 +24,10 @@
 
 ### 前置需求
 - [MelonLoader](https://melonwiki.xyz/) 已安裝
-- [鬼畜八荒](https://steamcommunity.com/sharedfiles/filedetails/?id=2917584333)（必備前置 MOD）
+- 鬼畜八荒（必備前置 MOD）
 
 ### 操作流程
-1. 訂閱本 MOD（或手動放入 `ModExportData/` 資料夾）
+1. 在 [Steam 工作坊訂閱本 MOD](https://steamcommunity.com/sharedfiles/filedetails/?id=3683459718)（或手動放入 `ModExportData/` 資料夾）
 2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v25) ===`
 3. 以宗主身份發起滅宗戰
 4. 打完宗門戰後，MOD 自動觸發處置序列
@@ -43,6 +41,15 @@
 
 ---
 
+## ⚠️ 已知限制
+
+### 宗主（門主）無法被處置
+宗門戰結束後，遊戲會將**戰死的 NPC 從 `allUnit` 列表中完全移除**，而非僅標記 `isDie=true`。由於門主在滅宗戰中幾乎必定陣亡，且被移除後無法透過任何 API 復活或存取，因此**門主不會出現在戰俘處置序列中**。
+
+這是遊戲底層的限制，並非 MOD 的 bug。其他存活的成員（長老、傳功、弟子等）則會正常被處置。
+
+---
+
 ## 🗂️ 檔案結構
 
 ```
@@ -52,7 +59,6 @@ Mod_nV039M/
 │   └── dll/
 │       └── MOD_nV039M.dll    # 編譯後的 DLL
 ├── ModExportData.cache        # MOD 匯出快取
-├── ModProjectPreview.png      # Steam 預覽圖
 ├── ModMain.cs                 # 原始碼
 └── README.md
 ```
@@ -120,6 +126,8 @@ DLL 注入解決了這些問題，實現了完全自動化。
 - 🆕 時間回溯偵測，讀取舊存檔時自動清除未來記錄
 - 🆕 自動復活戰死 NPC
 - 🆕 `IntoWorld` 事件監聽，支援存檔讀取恢復
+- 🗑️ 移除挑釁物道具及相關奇遇
+- 🗑️ 移除滅宗判定奇遇（改由 DLL 自動觸發）
 
 ### v1.0.1 (2026-04-02)
 - 🐛 修正奇遇觸發條件
@@ -148,5 +156,5 @@ MIT License
 - 原版「[鬼畜灭宗（功能性模组—公开版）](https://steamcommunity.com/sharedfiles/filedetails/?id=3438149783)」作者
 - [鬼谷八荒](https://store.steampowered.com/app/1468810/) 開發團隊
 - [MelonLoader](https://melonwiki.xyz/) 社群
-- [鬼畜八荒](https://steamcommunity.com/sharedfiles/filedetails/?id=2917584333) MOD 團隊
+- 鬼畜八荒 MOD 團隊
 - [OpenClaw](https://github.com/openclaw/openclaw) — AI 基礎設施
