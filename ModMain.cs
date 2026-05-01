@@ -26,7 +26,7 @@ namespace MOD_nV039M
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v31";
+        private const string VERSION = "v32";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -742,6 +742,51 @@ namespace MOD_nV039M
             return target.Count > before; // 有新增字串才算成功。
         }
 
+
+
+        private static int GetIntMember(object obj, string name, int fallback)
+        {
+            try
+            {
+                object val = GetMemberValue(obj, name); // 讀取指定欄位/屬性。
+                if (val == null) return fallback; // 沒值就用 fallback。
+                return Convert.ToInt32(val); // 轉成 int，例如 schoolWarData.playerCamp。
+            }
+            catch { return fallback; }
+        }
+
+        private static bool TryRecoverFromSchoolWarDataSchools(object schoolWarData)
+        {
+            if (schoolWarData == null) return false; // 沒有 schoolWarData 就不能用宗門物件恢復。
+
+            int playerCamp = GetIntMember(schoolWarData, "playerCamp", 0); // 讀取玩家陣營，1 通常代表攻方。
+            object attackSchool = GetMemberValue(schoolWarData, "attackSchool"); // 攻方宗門 MapBuildSchool。
+            object defendSchool = GetMemberValue(schoolWarData, "defendSchool"); // 守方宗門 MapBuildSchool。
+            bool defendDead = false; // 守方是否滅宗。
+            try { defendDead = Convert.ToBoolean(GetMemberValue(schoolWarData, "defendSchoolDie")); } catch { }
+
+            Log("[RECOVER] schoolWarData playerCamp=" + playerCamp + " defendSchoolDie=" + defendDead); // 印出判斷敵方依據。
+
+            if (playerCamp == 1)
+            {
+                if (TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.enemy")) return true; // 玩家為攻方時，敵方通常是守方宗門。
+                if (TryRecoverPrisonersFromCandidate(attackSchool, "schoolWarData.attackSchool.fallback")) return true; // 防止 playerCamp 語義不同，保留 fallback。
+            }
+            else if (playerCamp == 2)
+            {
+                if (TryRecoverPrisonersFromCandidate(attackSchool, "schoolWarData.attackSchool.enemy")) return true; // 玩家為守方時，敵方通常是攻方宗門。
+                if (TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.fallback")) return true; // 防止 playerCamp 語義不同，保留 fallback。
+            }
+            else
+            {
+                if (defendDead && TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.dead")) return true; // 不知道陣營時，優先抓已滅的守方。
+                if (TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.unknown")) return true; // 再試守方。
+                if (TryRecoverPrisonersFromCandidate(attackSchool, "schoolWarData.attackSchool.unknown")) return true; // 最後試攻方。
+            }
+
+            return false; // attack/defend 宗門物件都救不到。
+        }
+
         private static bool TryRecoverFromAnyStringLists(object obj, string label)
         {
             if (obj == null) return false; // 空物件不能掃。
@@ -846,7 +891,8 @@ namespace MOD_nV039M
             if (schoolWarData != null)
             {
                 DeepProbeObject(schoolWarData, "schoolWarData", 1); // 列出 schoolWarData 內部欄位與可能的 NPC id 清單。
-                if (TryRecoverFromAnyStringLists(schoolWarData, "schoolWarData")) Log("[RECOVER] recovered from schoolWarData string list"); // 從可疑清單直接救援。
+                if (TryRecoverFromSchoolWarDataSchools(schoolWarData)) Log("[RECOVER] recovered from schoolWarData school object"); // v32：直接從 attackSchool/defendSchool 的 buildData 救援。
+                if (savedPrisonerIds.Count == 0 && TryRecoverFromAnyStringLists(schoolWarData, "schoolWarData")) Log("[RECOVER] recovered from schoolWarData string list"); // 宗門物件救不到時，再嘗試可疑字串清單。
             }
 
             Type t = instance.GetType(); // 取得 SchoolWar 型別。

@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.7] - 2026-05-02
+
+### Added
+- 從 `schoolWarData.attackSchool` / `defendSchool` 的 `buildData` 直接恢復宗門成員名單。
+- 依 `playerCamp` 優先選敵方宗門，攻方玩家時優先抓 `defendSchool`。
+
+### Changed
+- MOD log 版號更新為 `v32`。
+
 ## [1.1.6] - 2026-05-02
 
 ### Added
