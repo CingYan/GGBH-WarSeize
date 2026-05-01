@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.5] - 2026-05-02
+
+### Added
+- 沒有 `warhistory` 時，戰後嘗試從 `SchoolWar` instance 反射救回敵方宗門/成員名單。
+- 增加 `[PROBE-SW]` 與 `[RECOVER]` log，用於定位已宣戰舊存檔是否仍保留戰爭狀態。
+
+### Changed
+- MOD log 版號更新為 `v30`。
+
 ## [1.1.4] - 2026-05-02
 
 ### Changed
@@ -14,7 +23,7 @@
 - 同時支援 DLL 位於 `ModCode/MOD_nV039M.dll` 與本地匯出的 `ModCode/dll/MOD_nV039M.dll`。
 
 ### Changed
-- MOD log 版號更新為 `v29`。
+- MOD log 版號更新為 `v28`。
 
 ## [1.1.2] - 2026-05-02
 

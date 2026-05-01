@@ -26,7 +26,7 @@ namespace MOD_nV039M
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v29";
+        private const string VERSION = "v30";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -535,6 +535,198 @@ namespace MOD_nV039M
                 }
             }
             catch { }
+        }
+
+
+
+        private static object GetMemberValue(object obj, string name)
+        {
+            if (obj == null || string.IsNullOrEmpty(name)) return null; // 空物件或空名稱直接跳過。
+            Type t = obj.GetType(); // 反射目前物件型別，用於讀取未知欄位。
+
+            try
+            {
+                FieldInfo f = t.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance); // 先找欄位。
+                if (f != null) return f.GetValue(obj); // 找到欄位就回傳值。
+            }
+            catch { }
+
+            try
+            {
+                PropertyInfo p = t.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance); // 再找屬性。
+                if (p != null && p.GetIndexParameters().Length == 0) return p.GetValue(obj, null); // 只讀取非 indexer 屬性，避免觸發例外。
+            }
+            catch { }
+
+            return null; // 找不到就回傳 null。
+        }
+
+        private static string GetStringMember(object obj, string name)
+        {
+            try
+            {
+                object val = GetMemberValue(obj, name); // 讀取指定欄位/屬性。
+                return val == null ? null : val.ToString(); // 轉成字串供 schoolID / buildData.id 使用。
+            }
+            catch { return null; }
+        }
+
+        private static void CollectListMember(object obj, string name, HashSet<string> target)
+        {
+            try
+            {
+                object val = GetMemberValue(obj, name); // 從 buildData 讀 npcIn/npcElders 等成員列表。
+                if (val != null) CollectList((dynamic)val, target); // 交給既有 CollectList 支援 Il2Cpp list。
+            }
+            catch { }
+        }
+
+        private static int CollectFemalePrisonersFromMemberIds(HashSet<string> allMembers, string label)
+        {
+            int femaleCount = 0; // 實際可從 allUnit 找回的女性 NPC 數量。
+            foreach (string uid in allMembers)
+            {
+                try
+                {
+                    WorldUnitBase unit = null; // 透過 runtime uid 找回世界角色。
+                    try { unit = g.world.unit.allUnit[uid]; } catch { continue; } // 找不到代表角色已被移除或 uid 不是 NPC。
+                    if (unit == null) continue; // 空角色跳過。
+
+                    var pd = unit.data.unitData.propertyData; // 角色屬性資料。
+                    if ((int)pd.sex != 2) continue; // 只保存女性 NPC。
+
+                    savedPrisonerIds.Add(uid); // 加入戰俘候選名單。
+                    femaleCount++; // 統計救回人數。
+                    Log("[RECOVER] " + label + " saved " + pd.GetName() + " id=" + uid); // 列出救回的人。
+                }
+                catch { }
+            }
+            return femaleCount; // 回傳救回人數。
+        }
+
+        private static bool TryRecoverPrisonersFromBuildData(object buildData, string label)
+        {
+            if (buildData == null) return false; // 沒有 buildData 就不能從宗門成員恢復。
+
+            HashSet<string> allMembers = new HashSet<string>(); // 收集宗門全部可能成員。
+            CollectListMember(buildData, "npcIn", allMembers); // 內門/一般成員。
+            CollectListMember(buildData, "npcElders", allMembers); // 長老。
+            CollectListMember(buildData, "npcBigElders", allMembers); // 大長老。
+            CollectListMember(buildData, "npcInherit", allMembers); // 傳承/真傳成員。
+
+            try
+            {
+                string leader = GetStringMember(buildData, "npcSchoolMain"); // 宗主/門主 ID。
+                if (!string.IsNullOrEmpty(leader)) allMembers.Add(leader); // 門主也加入候選。
+            }
+            catch { }
+
+            Log("[RECOVER] " + label + " memberCandidates=" + allMembers.Count); // 先看有沒有抓到宗門成員。
+            if (allMembers.Count == 0) return false; // 沒成員就不是可用 buildData。
+
+            string schoolID = GetStringMember(buildData, "id"); // 嘗試取得宗門 runtime ID。
+            if (!string.IsNullOrEmpty(schoolID)) targetSchoolID = schoolID; // 記錄宗門 ID 供歷史檔使用。
+
+            int femaleCount = CollectFemalePrisonersFromMemberIds(allMembers, label); // 從候選成員裡救回女性 NPC。
+            Log("[RECOVER] " + label + " females=" + femaleCount + " saved=" + savedPrisonerIds.Count + " school=" + (string.IsNullOrEmpty(schoolID) ? "unknown" : schoolID)); // 回報救援結果。
+            return femaleCount > 0; // 有救到人才算成功。
+        }
+
+        private static bool TryRecoverPrisonersFromCandidate(object candidate, string label)
+        {
+            if (candidate == null) return false; // 空候選跳過。
+            if (TryRecoverPrisonersFromBuildData(candidate, label + ".self")) return true; // 有些欄位本身就是 buildData。
+
+            object buildData = GetMemberValue(candidate, "buildData"); // MapBuildSchool 通常會有 buildData。
+            if (TryRecoverPrisonersFromBuildData(buildData, label + ".buildData")) return true; // 從 buildData 嘗試恢復。
+
+            return false; // 不是可恢復候選。
+        }
+
+        private static void ProbeSchoolWarMembers(object obj)
+        {
+            if (obj == null) return; // 沒有 SchoolWar instance 就無法 probe。
+            Type t = obj.GetType(); // 取得 SchoolWar runtime 型別。
+            int logged = 0; // 限制 log 數量，避免洗版。
+
+            foreach (FieldInfo f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                if (logged >= 80) break; // 最多印 80 個可疑欄位。
+                string n = f.Name.ToLower(); // 欄位名轉小寫方便比對。
+                if (!(n.Contains("school") || n.Contains("target") || n.Contains("build") || n.Contains("war") || n.Contains("atk") || n.Contains("def") || n.Contains("enemy"))) continue; // 只印可能相關欄位。
+                try
+                {
+                    object val = f.GetValue(obj); // 讀欄位值。
+                    Log("[PROBE-SW] field " + f.Name + " type=" + f.FieldType.Name + " value=" + (val == null ? "NULL" : val.ToString())); // 印出欄位名稱/型別/值。
+                    logged++; // 計數。
+                }
+                catch { }
+            }
+
+            foreach (PropertyInfo p in t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                if (logged >= 80) break; // 最多印 80 個可疑屬性。
+                if (p.GetIndexParameters().Length > 0) continue; // 跳過 indexer。
+                string n = p.Name.ToLower(); // 屬性名轉小寫方便比對。
+                if (!(n.Contains("school") || n.Contains("target") || n.Contains("build") || n.Contains("war") || n.Contains("atk") || n.Contains("def") || n.Contains("enemy"))) continue; // 只印可能相關屬性。
+                try
+                {
+                    object val = p.GetValue(obj, null); // 讀屬性值。
+                    Log("[PROBE-SW] prop " + p.Name + " type=" + p.PropertyType.Name + " value=" + (val == null ? "NULL" : val.ToString())); // 印出屬性名稱/型別/值。
+                    logged++; // 計數。
+                }
+                catch { }
+            }
+        }
+
+        private static void RecoverPrisonersFromSchoolWarState(SchoolWar instance)
+        {
+            if (instance == null) return; // 沒有 instance 就不能從 SchoolWar 狀態恢復。
+            Log("[RECOVER] probing SchoolWar state"); // 標記開始從戰爭狀態救援。
+            ProbeSchoolWarMembers(instance); // 先印出可疑欄位，讓下一輪 debug 有資料。
+
+            Type t = instance.GetType(); // 取得 SchoolWar 型別。
+            foreach (FieldInfo f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                try
+                {
+                    object val = f.GetValue(instance); // 讀取每個欄位作為候選。
+                    if (TryRecoverPrisonersFromCandidate(val, "field." + f.Name)) break; // 找到可用宗門資料就停止。
+                }
+                catch { }
+            }
+
+            if (savedPrisonerIds.Count == 0)
+            {
+                foreach (PropertyInfo p in t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                {
+                    try
+                    {
+                        if (p.GetIndexParameters().Length > 0) continue; // 跳過 indexer。
+                        object val = p.GetValue(instance, null); // 讀取每個屬性作為候選。
+                        if (TryRecoverPrisonersFromCandidate(val, "prop." + p.Name)) break; // 找到可用宗門資料就停止。
+                    }
+                    catch { }
+                }
+            }
+
+            if (savedPrisonerIds.Count > 0)
+            {
+                LoadAllRecords(); // 將救回名單寫入歷史檔，避免同一輪後續又遺失。
+                var rec = new WarRecord(); // 建立補救紀錄。
+                rec.schoolID = string.IsNullOrEmpty(targetSchoolID) ? "recovered" : targetSchoolID; // 有宗門 ID 就寫宗門 ID，否則標 recovered。
+                rec.phase = "post-war"; // 已經在戰後 CLEAR，因此直接標 post-war。
+                rec.gameTime = GetGameTime(); // 記錄目前遊戲時間。
+                rec.index = 0; // 從第一位戰俘開始處理。
+                rec.prisoners = new List<string>(savedPrisonerIds); // 保存救回名單。
+                allRecords.Add(rec); // 加入紀錄。
+                SaveAllRecords(); // 寫檔。
+                Log("[RECOVER] record added from SchoolWar state saved=" + savedPrisonerIds.Count); // 回報補救成功。
+            }
+            else
+            {
+                Log("[RECOVER] SchoolWar state did not expose prisoner list"); // 回報這一戰無法從狀態救回。
+            }
         }
 
         private static void OpenDeclareDrama()
@@ -1196,7 +1388,13 @@ namespace MOD_nV039M
 
                 if (savedPrisonerIds.Count == 0)
                 {
-                    Log("[CLEAR] rebuilding prisoner list fallback"); // 只有沒有 warhistory 時才進入 fallback 掃描。
+                    Log("[CLEAR] recovering prisoner list from SchoolWar state"); // 沒有 warhistory 時，嘗試從目前 SchoolWar instance 反射救回宣戰目標。
+                    RecoverPrisonersFromSchoolWarState(__instance); // 補救已宣戰但 MOD 尚未記錄的舊存檔。
+                }
+
+                if (savedPrisonerIds.Count == 0)
+                {
+                    Log("[CLEAR] rebuilding prisoner list fallback"); // SchoolWar 狀態也救不到時，才進入最後 fallback 掃描。
                     RebuildPrisonerList(); // fallback 保守掃描，避免亂抓非戰俘 NPC。
                 }
 
