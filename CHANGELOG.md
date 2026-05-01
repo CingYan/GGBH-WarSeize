@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.2] - 2026-05-02
+
+### Fixed
+- 修正 IL2CPP/MelonLoader 載入時 `Assembly.Location` 為空，導致 v26 將 `warhistory` 寫到遊戲根目錄的問題。
+- 新增從 `ModExportData/*/ModCode/dll/MOD_nV039M.dll` 反查真實 MOD DLL 目錄的 fallback。
+
+### Changed
+- MOD log 版號更新為 `v27`。
+
 ## [1.1.1] - 2026-05-02
 
 ### Fixed

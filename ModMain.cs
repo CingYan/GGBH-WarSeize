@@ -26,7 +26,7 @@ namespace MOD_nV039M
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v26";
+        private const string VERSION = "v27";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -39,6 +39,7 @@ namespace MOD_nV039M
         private static bool worldEnterHooked = false;
         private static bool arrestPatched = false;
         private const string SAVE_FILE_PREFIX = "warhistory_"; // 歷史記錄檔名前綴，集中管理避免到處硬寫字串。
+        private const string MOD_DLL_NAME = "MOD_nV039M.dll"; // MOD 匯出後的 DLL 檔名，用於 Assembly.Location 為空時從 ModExportData 反查真實目錄。
         private static string modDir = null; // 目前 MOD DLL 所在目錄；啟動時動態解析，不再綁死 Steam 安裝路徑。
 
         private static void Log(string msg)
@@ -570,15 +571,62 @@ namespace MOD_nV039M
             }
 
             string baseDir = AppDomain.CurrentDomain.BaseDirectory; // Assembly 位置不可用時，退回遊戲/Loader 的基準目錄。
+            string foundFromBase = FindModDllDirectory(baseDir); // 從遊戲根目錄反查 ModExportData 裡真正的 ModCode/dll。
+            if (!string.IsNullOrEmpty(foundFromBase))
+            {
+                Log("[PATH] assembly location empty, found mod dll from baseDir=" + foundFromBase); // v26 會停在 baseDir；v27 改成繼續找到 MOD DLL 目錄。
+                return foundFromBase; // 存檔放回 MOD DLL 同層，避免寫到遊戲根目錄。
+            }
+
+            string currentDir = Environment.CurrentDirectory; // 第二層 fallback：目前工作目錄。
+            string foundFromCurrent = FindModDllDirectory(currentDir); // 有些 Loader 的 baseDir/currentDir 不同，兩邊都檢查。
+            if (!string.IsNullOrEmpty(foundFromCurrent))
+            {
+                Log("[PATH] found mod dll from currentDir=" + foundFromCurrent); // 記錄是從 currentDir 找到的。
+                return foundFromCurrent; // 同樣回傳 MOD DLL 所在資料夾。
+            }
+
             if (!string.IsNullOrEmpty(baseDir) && Directory.Exists(baseDir))
             {
-                Log("[PATH] assembly location empty, fallback baseDir=" + baseDir); // fallback 也要可追蹤。
+                Log("[PATH] mod dll not found, fallback baseDir=" + baseDir); // 找不到 MOD DLL 時才退回遊戲根目錄。
                 return baseDir; // 保底仍然使用 runtime 提供的目錄，不使用任何硬寫入安裝路徑。
             }
 
-            string currentDir = Environment.CurrentDirectory; // 最後保底：目前工作目錄。
             Log("[PATH] fallback currentDir=" + currentDir); // 如果走到這裡，代表環境很異常，log 需要明確。
             return string.IsNullOrEmpty(currentDir) ? "." : currentDir; // 永遠回傳可組路徑的值，避免 GetSaveFilePath 產生 null。
+        }
+
+        private static string FindModDllDirectory(string rootDir)
+        {
+            if (string.IsNullOrEmpty(rootDir) || !Directory.Exists(rootDir)) return null; // root 不存在就不能搜尋。
+
+            try
+            {
+                string directDll = Path.Combine(rootDir, MOD_DLL_NAME); // 若 Loader 已經把工作目錄切到 dll 層，先檢查目前目錄。
+                if (File.Exists(directDll)) return rootDir; // 目前目錄就是 MOD DLL 目錄。
+            }
+            catch { }
+
+            try
+            {
+                string exportRoot = Path.Combine(rootDir, "ModExportData"); // 鬼谷八荒 MOD 匯出資料夾。
+                if (!Directory.Exists(exportRoot)) return null; // 沒有 ModExportData 就不掃，避免亂跑整個硬碟。
+
+                string expectedByNamespace = Path.Combine(exportRoot, typeof(ModMain).Namespace, "ModCode", "dll", MOD_DLL_NAME); // 優先用 namespace 對應的 MOD ID 找 DLL。
+                if (File.Exists(expectedByNamespace)) return Path.GetDirectoryName(expectedByNamespace); // 找到就回傳 ModCode/dll。
+
+                foreach (string modRoot in Directory.GetDirectories(exportRoot))
+                {
+                    string dllPath = Path.Combine(modRoot, "ModCode", "dll", MOD_DLL_NAME); // 掃每個 MOD 的標準 DLL 位置。
+                    if (File.Exists(dllPath)) return Path.GetDirectoryName(dllPath); // 找到本 MOD DLL 就回傳該目錄。
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("[PATH] FindModDllDirectory error: " + ex.Message); // 搜尋失敗保留原因，方便判斷權限或路徑問題。
+            }
+
+            return null; // 沒找到 MOD DLL，交給 ResolveModDirectory 的保底邏輯。
         }
 
         private static void RestorePrisonersFromRecordIfNeeded()
