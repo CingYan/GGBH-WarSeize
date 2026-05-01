@@ -28,7 +28,7 @@
 
 ### 操作流程
 1. 在 [Steam 工作坊訂閱本 MOD](https://steamcommunity.com/sharedfiles/filedetails/?id=3683459718)（或手動放入 `ModExportData/` 資料夾）
-2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v28) ===`
+2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v29) ===`
 3. 以宗主身份發起滅宗戰
 4. 打完宗門戰後，MOD 自動觸發處置序列
 5. 依照劇情選項決定每位戰俘的命運
@@ -64,7 +64,7 @@ Mod_nV039M/
 ```
 
 ### 歷史記錄檔
-MOD 運行時會從實際載入的 DLL 位置動態解析目錄，並在該目錄生成 `warhistory_{玩家ID}.json`，不再綁定固定 Steam 安裝路徑：
+MOD 運行時會直接在遊戲根目錄生成 `warhistory_{玩家ID}.json`，避免本地 MOD 與 Steam Workshop 安裝路徑差異：
 ```json
 {
   "records": [
@@ -115,10 +115,15 @@ DLL 注入解決了這些問題，實現了完全自動化。
 
 ## 📝 更新日誌
 
+### v1.1.4 (2026-05-02)
+- 🐛 `warhistory_{玩家ID}.json` 改為直接寫入遊戲根目錄，不再依賴本地 MOD 或 Steam Workshop 路徑
+- 🔍 進世界取得玩家 ID 後，若 `warhistory_{玩家ID}.json` 不存在，先建立空 records 檔以驗證路徑與寫入權限
+- 🏷️ 內部 MOD log 版號更新為 `v29`
+
 ### v1.1.3 (2026-05-02)
 - 🐛 補上 Steam Workshop 結構搜尋：`steamapps/workshop/content/1468810/<workshop-id>/ModCode/MOD_nV039M.dll`
 - 🐛 同時支援 DLL 位於 `ModCode/MOD_nV039M.dll` 與 `ModCode/dll/MOD_nV039M.dll`
-- 🏷️ 內部 MOD log 版號更新為 `v28`
+- 🏷️ 內部 MOD log 版號更新為 `v29`
 
 ### v1.1.2 (2026-05-02)
 - 🐛 修正 MelonLoader/IL2CPP 下 `Assembly.Location` 為空時會 fallback 到遊戲根目錄的問題

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.4] - 2026-05-02
+
+### Changed
+- `warhistory_{玩家ID}.json` 改為直接寫入遊戲根目錄，不再依賴本地 MOD 或 Steam Workshop 路徑。
+- 進世界取得玩家 ID 後，若 `warhistory_{玩家ID}.json` 不存在，先建立空 records 檔以驗證路徑與寫入權限。
+- MOD log 版號更新為 `v29`。
+
 ## [1.1.3] - 2026-05-02
 
 ### Fixed
@@ -7,7 +14,7 @@
 - 同時支援 DLL 位於 `ModCode/MOD_nV039M.dll` 與本地匯出的 `ModCode/dll/MOD_nV039M.dll`。
 
 ### Changed
-- MOD log 版號更新為 `v28`。
+- MOD log 版號更新為 `v29`。
 
 ## [1.1.2] - 2026-05-02
 
