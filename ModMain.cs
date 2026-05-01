@@ -26,7 +26,7 @@ namespace MOD_nV039M
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v32";
+        private const string VERSION = "v33";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -546,15 +546,33 @@ namespace MOD_nV039M
 
             try
             {
-                FieldInfo f = t.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance); // 先找欄位。
+                FieldInfo f = t.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance); // 先找精確欄位。
                 if (f != null) return f.GetValue(obj); // 找到欄位就回傳值。
             }
             catch { }
 
             try
             {
-                PropertyInfo p = t.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance); // 再找屬性。
+                PropertyInfo p = t.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance); // 再找精確屬性。
                 if (p != null && p.GetIndexParameters().Length == 0) return p.GetValue(obj, null); // 只讀取非 indexer 屬性，避免觸發例外。
+            }
+            catch { }
+
+            try
+            {
+                foreach (FieldInfo f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                {
+                    if (string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase)) return f.GetValue(obj); // IL2CPP wrapper 有時大小寫不同，補 case-insensitive 欄位搜尋。
+                }
+            }
+            catch { }
+
+            try
+            {
+                foreach (PropertyInfo p in t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                {
+                    if (p.GetIndexParameters().Length == 0 && string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p.GetValue(obj, null); // 補 case-insensitive 屬性搜尋。
+                }
             }
             catch { }
 
@@ -632,14 +650,77 @@ namespace MOD_nV039M
             return femaleCount > 0; // 有救到人才算成功。
         }
 
+
+        private static int TryRecoverPrisonersBySchoolID(string schoolID, string label)
+        {
+            if (string.IsNullOrEmpty(schoolID)) return 0; // 沒宗門 ID 就不能用 schoolID 掃描。
+            int scanned = 0; // 掃描到的同宗門角色數。
+            int female = 0; // 同宗門女性角色數。
+
+            try
+            {
+                var enumerator = g.world.unit.allUnit.GetEnumerator(); // 掃目前世界角色。
+                while (enumerator.MoveNext())
+                {
+                    try
+                    {
+                        var pair = enumerator.Current; // pair.Key 是 NPC runtime ID。
+                        WorldUnitBase unit = pair.Value; // 角色物件。
+                        if (unit == null) continue; // 空角色跳過。
+
+                        var ud = unit.data.unitData; // 角色資料。
+                        if (ud.schoolID != schoolID) continue; // 只抓指定宗門。
+                        scanned++; // 同宗門計數。
+
+                        var pd = ud.propertyData; // 角色屬性。
+                        if ((int)pd.sex != 2) continue; // 只保存女性 NPC。
+                        female++; // 女性計數。
+                        savedPrisonerIds.Add(pair.Key); // 加入戰俘候選。
+                        Log("[RECOVER] " + label + " bySchoolID saved " + pd.GetName() + " id=" + pair.Key); // 列出救回的人。
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("[RECOVER] " + label + " bySchoolID scan error: " + ex.Message); // 掃描失敗保留原因。
+            }
+
+            Log("[RECOVER] " + label + " bySchoolID=" + schoolID + " scanned=" + scanned + " female=" + female); // 回報 schoolID 掃描結果。
+            return female; // 回傳救回女性數量。
+        }
+
+        private static bool TryRecoverFromNamedChild(object candidate, string memberName, string label)
+        {
+            object child = GetMemberValue(candidate, memberName); // 嘗試讀取 MapBuildSchool 內可能保存 buildData 的欄位/屬性。
+            if (child == null) return false; // 沒有這個 child 就跳過。
+
+            if (TryRecoverPrisonersFromBuildData(child, label + "." + memberName)) return true; // child 本身若是 buildData，直接從宗門成員清單恢復。
+
+            string childID = GetStringMember(child, "id"); // 若 child 有宗門 id，改用 schoolID 掃 allUnit。
+            if (TryRecoverPrisonersBySchoolID(childID, label + "." + memberName) > 0) return true; // schoolID 掃描成功。
+
+            return false; // 這個 child 不可用。
+        }
+
         private static bool TryRecoverPrisonersFromCandidate(object candidate, string label)
         {
             if (candidate == null) return false; // 空候選跳過。
             if (TryRecoverPrisonersFromBuildData(candidate, label + ".self")) return true; // 有些欄位本身就是 buildData。
 
-            object buildData = GetMemberValue(candidate, "buildData"); // MapBuildSchool 通常會有 buildData。
-            if (TryRecoverPrisonersFromBuildData(buildData, label + ".buildData")) return true; // 從 buildData 嘗試恢復。
+            string[] childNames = new string[] { "buildData", "BuildData", "data", "Data", "schoolData", "SchoolData", "mapBuildData", "MapBuildData", "build", "Build" }; // MapBuildSchool 在不同 wrapper 版本可能用不同名稱保存資料。
+            foreach (string childName in childNames)
+            {
+                if (TryRecoverFromNamedChild(candidate, childName, label)) return true; // 逐一嘗試可能的宗門資料欄位。
+            }
 
+            string selfID = GetStringMember(candidate, "id"); // 如果 MapBuildSchool 本身有 id，直接用 schoolID 掃 allUnit。
+            if (TryRecoverPrisonersBySchoolID(selfID, label + ".self") > 0) return true; // schoolID 掃描成功。
+
+            string schoolID = GetStringMember(candidate, "schoolID"); // 也嘗試 schoolID 欄位。
+            if (TryRecoverPrisonersBySchoolID(schoolID, label + ".schoolID") > 0) return true; // schoolID 掃描成功。
+
+            DeepProbeObject(candidate, label + ".probe", 1); // 還是救不到時，深挖 MapBuildSchool 本身，找實際欄位名。
             return false; // 不是可恢復候選。
         }
 

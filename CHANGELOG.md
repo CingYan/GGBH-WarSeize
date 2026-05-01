@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.8] - 2026-05-02
+
+### Added
+- 對 `MapBuildSchool` 增加多名稱資料欄位探測：`buildData/data/schoolData/mapBuildData/build`。
+- 若取得宗門 ID，直接掃 `allUnit.unitData.schoolID` 救回同宗門女性 NPC。
+- 救援失敗時深挖 `MapBuildSchool` 本身欄位，找出實際資料名稱。
+
+### Changed
+- MOD log 版號更新為 `v33`。
+
 ## [1.1.7] - 2026-05-02
 
 ### Added
