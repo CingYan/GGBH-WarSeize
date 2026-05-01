@@ -28,7 +28,7 @@
 
 ### 操作流程
 1. 在 [Steam 工作坊訂閱本 MOD](https://steamcommunity.com/sharedfiles/filedetails/?id=3683459718)（或手動放入 `ModExportData/` 資料夾）
-2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v30) ===`
+2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v31) ===`
 3. 以宗主身份發起滅宗戰
 4. 打完宗門戰後，MOD 自動觸發處置序列
 5. 依照劇情選項決定每位戰俘的命運
@@ -114,6 +114,11 @@ DLL 注入解決了這些問題，實現了完全自動化。
 ---
 
 ## 📝 更新日誌
+
+### v1.1.6 (2026-05-02)
+- 🔍 深挖 `schoolWarData` 內部欄位/屬性，列出 `[PROBE-DEEP]` 與 `[PROBE-LIST]` 候選 NPC 清單
+- 🛟 若 `schoolWarData` 內有可疑戰爭/宗門成員 list，嘗試自動對回 `allUnit` 救回女性戰俘
+- 🏷️ 內部 MOD log 版號更新為 `v31`
 
 ### v1.1.5 (2026-05-02)
 - 🛟 沒有 `warhistory` 時，戰後嘗試從 `SchoolWar` instance 反射救回敵方宗門/成員名單

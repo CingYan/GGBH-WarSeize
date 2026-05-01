@@ -26,7 +26,7 @@ namespace MOD_nV039M
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v30";
+        private const string VERSION = "v31";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -679,11 +679,175 @@ namespace MOD_nV039M
             }
         }
 
+
+
+        private static int CountValidFemaleUnits(HashSet<string> ids, string label)
+        {
+            int valid = 0; // 可在 allUnit 找到的 NPC 數量。
+            int female = 0; // 可在 allUnit 找到且性別為女性的 NPC 數量。
+            int sample = 0; // sample log 限制，避免洗版。
+
+            foreach (string uid in ids)
+            {
+                try
+                {
+                    WorldUnitBase unit = null; // 嘗試用候選字串當 NPC runtime id。
+                    try { unit = g.world.unit.allUnit[uid]; } catch { continue; } // 不是 NPC id 就跳過。
+                    if (unit == null) continue; // 空角色跳過。
+                    valid++; // 找得到角色。
+
+                    var pd = unit.data.unitData.propertyData; // 取得角色屬性。
+                    if ((int)pd.sex == 2)
+                    {
+                        female++; // 女性角色計數。
+                        if (sample < 5)
+                        {
+                            Log("[PROBE-LIST] " + label + " femaleSample=" + pd.GetName() + " id=" + uid); // 印前 5 個女性樣本，判斷是不是敵宗成員。
+                            sample++; // 增加樣本計數。
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            Log("[PROBE-LIST] " + label + " ids=" + ids.Count + " validUnits=" + valid + " femaleUnits=" + female); // 回報候選清單品質。
+            return female; // 回傳女性數量，供自動救援判斷。
+        }
+
+        private static bool TryCollectStringIds(object listObj, HashSet<string> target)
+        {
+            if (listObj == null) return false; // 空清單直接失敗。
+            int before = target.Count; // 記錄收集前數量。
+
+            try
+            {
+                dynamic d = listObj; // Il2Cpp list 通常支援 Count 與 indexer。
+                int count = d.Count; // 嘗試讀 Count。
+                for (int i = 0; i < count; i++)
+                {
+                    try
+                    {
+                        object item = d[i]; // 讀取第 i 個元素。
+                        if (item != null)
+                        {
+                            string uid = item.ToString(); // 轉成字串候選 ID。
+                            if (!string.IsNullOrEmpty(uid)) target.Add(uid); // 加入候選集合。
+                        }
+                    }
+                    catch { break; }
+                }
+            }
+            catch { }
+
+            return target.Count > before; // 有新增字串才算成功。
+        }
+
+        private static bool TryRecoverFromAnyStringLists(object obj, string label)
+        {
+            if (obj == null) return false; // 空物件不能掃。
+            Type t = obj.GetType(); // 取得型別。
+            bool recovered = false; // 是否已恢復名單。
+
+            foreach (FieldInfo f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                try
+                {
+                    object val = f.GetValue(obj); // 讀欄位值。
+                    HashSet<string> ids = new HashSet<string>(); // 存候選字串 ID。
+                    if (!TryCollectStringIds(val, ids)) continue; // 不是 list 或沒有字串就跳過。
+                    int females = CountValidFemaleUnits(ids, label + ".field." + f.Name); // 對回 allUnit 看是否像 NPC 清單。
+                    if (females > 0 && IsLikelyWarMemberList(f.Name))
+                    {
+                        int saved = CollectFemalePrisonersFromMemberIds(ids, label + ".field." + f.Name); // 欄位名像戰爭/宗門名單才自動救援。
+                        recovered = saved > 0; // 有存到人才算成功。
+                        if (recovered) break; // 成功後停止，避免混入其他清單。
+                    }
+                }
+                catch { }
+            }
+
+            if (!recovered)
+            {
+                foreach (PropertyInfo p in t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                {
+                    try
+                    {
+                        if (p.GetIndexParameters().Length > 0) continue; // 跳過 indexer。
+                        object val = p.GetValue(obj, null); // 讀屬性值。
+                        HashSet<string> ids = new HashSet<string>(); // 存候選字串 ID。
+                        if (!TryCollectStringIds(val, ids)) continue; // 不是 list 或沒有字串就跳過。
+                        int females = CountValidFemaleUnits(ids, label + ".prop." + p.Name); // 對回 allUnit 看是否像 NPC 清單。
+                        if (females > 0 && IsLikelyWarMemberList(p.Name))
+                        {
+                            int saved = CollectFemalePrisonersFromMemberIds(ids, label + ".prop." + p.Name); // 屬性名像戰爭/宗門名單才自動救援。
+                            recovered = saved > 0; // 有存到人才算成功。
+                            if (recovered) break; // 成功後停止。
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            return recovered; // 回傳是否救援成功。
+        }
+
+        private static bool IsLikelyWarMemberList(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false; // 沒名稱不自動救援，避免誤抓。
+            string n = name.ToLower(); // 小寫比對。
+            return n.Contains("npc") || n.Contains("unit") || n.Contains("member") || n.Contains("school") || n.Contains("def") || n.Contains("enemy") || n.Contains("target") || n.Contains("war"); // 僅自動接受看起來像戰爭/宗門成員的清單。
+        }
+
+        private static void DeepProbeObject(object obj, string label, int depth)
+        {
+            if (obj == null || depth <= 0) return; // 空物件或深度用完就停止。
+            Type t = obj.GetType(); // 取得型別。
+            int logged = 0; // 限制每層 log 數量。
+
+            foreach (FieldInfo f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                if (logged >= 80) break; // 避免洗版。
+                try
+                {
+                    object val = f.GetValue(obj); // 讀欄位值。
+                    Log("[PROBE-DEEP] " + label + ".field." + f.Name + " type=" + f.FieldType.Name + " value=" + (val == null ? "NULL" : val.ToString())); // 印欄位基本資訊。
+                    logged++; // 計數。
+
+                    HashSet<string> ids = new HashSet<string>(); // 嘗試當清單解析。
+                    if (TryCollectStringIds(val, ids)) CountValidFemaleUnits(ids, label + ".field." + f.Name); // 若是字串清單，回報對應 NPC 數。
+                }
+                catch { }
+            }
+
+            foreach (PropertyInfo p in t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                if (logged >= 80) break; // 避免洗版。
+                if (p.GetIndexParameters().Length > 0) continue; // 跳過 indexer。
+                try
+                {
+                    object val = p.GetValue(obj, null); // 讀屬性值。
+                    Log("[PROBE-DEEP] " + label + ".prop." + p.Name + " type=" + p.PropertyType.Name + " value=" + (val == null ? "NULL" : val.ToString())); // 印屬性基本資訊。
+                    logged++; // 計數。
+
+                    HashSet<string> ids = new HashSet<string>(); // 嘗試當清單解析。
+                    if (TryCollectStringIds(val, ids)) CountValidFemaleUnits(ids, label + ".prop." + p.Name); // 若是字串清單，回報對應 NPC 數。
+                }
+                catch { }
+            }
+        }
+
         private static void RecoverPrisonersFromSchoolWarState(SchoolWar instance)
         {
             if (instance == null) return; // 沒有 instance 就不能從 SchoolWar 狀態恢復。
             Log("[RECOVER] probing SchoolWar state"); // 標記開始從戰爭狀態救援。
             ProbeSchoolWarMembers(instance); // 先印出可疑欄位，讓下一輪 debug 有資料。
+
+            object schoolWarData = GetMemberValue(instance, "schoolWarData"); // v30 log 顯示 SchoolWar 內有 schoolWarData，v31 進一步深挖它。
+            if (schoolWarData != null)
+            {
+                DeepProbeObject(schoolWarData, "schoolWarData", 1); // 列出 schoolWarData 內部欄位與可能的 NPC id 清單。
+                if (TryRecoverFromAnyStringLists(schoolWarData, "schoolWarData")) Log("[RECOVER] recovered from schoolWarData string list"); // 從可疑清單直接救援。
+            }
 
             Type t = instance.GetType(); // 取得 SchoolWar 型別。
             foreach (FieldInfo f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))

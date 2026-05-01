@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.6] - 2026-05-02
+
+### Added
+- 深挖 `schoolWarData` 內部欄位/屬性，列出 `[PROBE-DEEP]` 與 `[PROBE-LIST]` 候選 NPC 清單。
+- 若 `schoolWarData` 內有可疑戰爭/宗門成員 list，嘗試自動對回 `allUnit` 救回女性戰俘。
+
+### Changed
+- MOD log 版號更新為 `v31`。
+
 ## [1.1.5] - 2026-05-02
 
 ### Added
