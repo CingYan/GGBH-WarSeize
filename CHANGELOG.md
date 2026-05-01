@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.11] - 2026-05-02
+
+### Fixed
+- 移除 `UnityEngine.Object.FindObjectOfType(typeof(SchoolWar))`，避免 IL2CPP `System.Type` / `Il2CppSystem.Type` 編譯錯誤。
+- 改用 Harmony patch 傳入的 `SchoolWar __instance` 快取作為讀檔 hint/recovery 來源。
+
+### Changed
+- MOD log 版號更新為 `v36`。
+
 ## [1.1.10] - 2026-05-02
 
 ### Added

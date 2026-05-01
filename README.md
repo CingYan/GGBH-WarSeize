@@ -28,7 +28,7 @@
 
 ### 操作流程
 1. 在 [Steam 工作坊訂閱本 MOD](https://steamcommunity.com/sharedfiles/filedetails/?id=3683459718)（或手動放入 `ModExportData/` 資料夾）
-2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v35) ===`
+2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v36) ===`
 3. 以宗主身份發起滅宗戰
 4. 打完宗門戰後，MOD 自動觸發處置序列
 5. 依照劇情選項決定每位戰俘的命運
@@ -114,6 +114,11 @@ DLL 注入解決了這些問題，實現了完全自動化。
 ---
 
 ## 📝 更新日誌
+
+### v1.1.11 (2026-05-02)
+- 🐛 移除 `UnityEngine.Object.FindObjectOfType(typeof(SchoolWar))`，避免 IL2CPP `System.Type` / `Il2CppSystem.Type` 編譯錯誤
+- 🧭 改用 Harmony patch 傳入的 `SchoolWar __instance` 快取作為讀檔 hint/recovery 來源
+- 🏷️ 內部 MOD log 版號更新為 `v36`
 
 ### v1.1.10 (2026-05-02)
 - 🧭 `IntoWorld` 後延遲 120 frame 掃描 `SchoolWar.schoolWarData`，在讀檔時間點先保存敵方宗門 hint

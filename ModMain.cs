@@ -26,7 +26,7 @@ namespace MOD_nV039M
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v35";
+        private const string VERSION = "v36";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -41,6 +41,7 @@ namespace MOD_nV039M
         private const string SAVE_FILE_PREFIX = "warhistory_"; // 歷史記錄檔名前綴，集中管理避免到處硬寫字串。
         private const string MOD_DLL_NAME = "MOD_nV039M.dll"; // MOD 匯出後的 DLL 檔名，用於 Assembly.Location 為空時反查真實目錄。
         private static string modDir = null; // 目前 MOD DLL 所在目錄；啟動時動態解析，不再綁死 Steam 安裝路徑。
+        private static SchoolWar cachedSchoolWar = null; // 最近一次 Harmony patch 傳入的 SchoolWar instance；SchoolWar 不是 UnityEngine.Object，不能用 FindObjectOfType 找。
 
         private static void Log(string msg)
         {
@@ -433,6 +434,7 @@ namespace MOD_nV039M
         // =============================================================
         public static void Patch_AttackSchool(SchoolWar __instance, MapBuildSchool target)
         {
+            cachedSchoolWar = __instance; // 宣戰 hook 取得 SchoolWar instance 時先快取，供讀檔 hint 或後續 debug 使用。
             if (attackHandled) return;
             attackHandled = true;
             Log("[ATTACK] triggered");
@@ -1059,16 +1061,9 @@ namespace MOD_nV039M
 
         private static SchoolWar FindActiveSchoolWar()
         {
-            try
-            {
-                object obj = UnityEngine.Object.FindObjectOfType(typeof(SchoolWar)); // IntoWorld 後嘗試從場景找目前存在的 SchoolWar 元件。
-                return obj as SchoolWar; // 找得到就回傳，找不到代表戰爭資料可能尚未初始化。
-            }
-            catch (Exception ex)
-            {
-                Log("[WORLD-HINT] FindActiveSchoolWar error: " + ex.Message); // 保留 Unity 查找失敗原因。
-                return null; // 查找失敗時交給戰後 SchoolWarClear 再補抓。
-            }
+            if (cachedSchoolWar != null) return cachedSchoolWar; // SchoolWar 不是 UnityEngine.Object，不能用 FindObjectOfType；只能使用 patch 傳入過的 instance。
+            Log("[WORLD-HINT] no cached SchoolWar instance yet"); // 讀檔後若沒有任何 SchoolWar hook 先觸發，這裡會是正常拿不到。
+            return null; // 沒有快取 instance 就交給 AttackSchool / SchoolWarClear hook 再補抓。
         }
 
         private static void TryCaptureWarHintAfterWorldEnter()
@@ -1841,6 +1836,7 @@ namespace MOD_nV039M
         // =============================================================
         public static void Patch_SchoolWarClear(SchoolWar __instance)
         {
+            cachedSchoolWar = __instance; // 戰後 clear hook 一定會提供 SchoolWar instance，快取供同輪 recovery 使用。
             long now = DateTime.Now.Ticks / TimeSpan.TicksPerSecond;
             if (now == lastBatchSec) return;
             lastBatchSec = now;
