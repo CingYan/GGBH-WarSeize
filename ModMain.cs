@@ -26,7 +26,7 @@ namespace MOD_nV039M
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v33";
+        private const string VERSION = "v34";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -825,6 +825,91 @@ namespace MOD_nV039M
 
 
 
+
+        private static string TryExtractUnitId(object obj, int depth)
+        {
+            if (obj == null || depth <= 0) return null; // 空物件或深度用完就停止。
+
+            string[] idNames = new string[] { "unitID", "UnitID", "unitId", "id", "ID", "uid", "UID" }; // 常見角色 ID 欄位名稱。
+            foreach (string idName in idNames)
+            {
+                try
+                {
+                    object val = GetMemberValue(obj, idName); // 嘗試讀取角色 ID。
+                    if (val != null)
+                    {
+                        string uid = val.ToString(); // 轉字串。
+                        if (!string.IsNullOrEmpty(uid) && HasWorldUnit(uid)) return uid; // 必須能對回 allUnit 才接受。
+                    }
+                }
+                catch { }
+            }
+
+            string[] childNames = new string[] { "unit", "Unit", "worldUnit", "WorldUnit", "unitData", "UnitData", "data", "Data", "baseData", "BaseData" }; // 常見巢狀角色資料欄位。
+            foreach (string childName in childNames)
+            {
+                try
+                {
+                    object child = GetMemberValue(obj, childName); // 讀巢狀物件。
+                    string uid = TryExtractUnitId(child, depth - 1); // 往下一層找角色 ID。
+                    if (!string.IsNullOrEmpty(uid)) return uid; // 找到就回傳。
+                }
+                catch { }
+            }
+
+            return null; // 找不到有效角色 ID。
+        }
+
+        private static bool HasWorldUnit(string uid)
+        {
+            try
+            {
+                WorldUnitBase unit = g.world.unit.allUnit[uid]; // 嘗試用 ID 對回世界角色。
+                return unit != null; // 找得到才是真 NPC ID。
+            }
+            catch { return false; }
+        }
+
+        private static bool TryRecoverFromSchoolWarUnitList(object listObj, string label)
+        {
+            if (listObj == null) return false; // 沒清單就不能恢復。
+            HashSet<string> ids = new HashSet<string>(); // 收集可對回 allUnit 的角色 ID。
+
+            try
+            {
+                dynamic d = listObj; // SchoolWar 的 attackUnits/defendUnits 是 Il2Cpp list。
+                int count = d.Count; // 讀取數量。
+                Log("[PROBE-UNITLIST] " + label + " count=" + count); // 回報清單大小。
+                for (int i = 0; i < count; i++)
+                {
+                    try
+                    {
+                        object item = d[i]; // 取出 UnitData。
+                        if (item == null) continue; // 空項跳過。
+                        Log("[PROBE-UNITLIST] " + label + "[" + i + "] type=" + item.GetType().Name + " value=" + item.ToString()); // 印出項目型別。
+                        DeepProbeObject(item, label + "[" + i + "]", 1); // 深挖 UnitData 欄位，找真正角色 ID 名稱。
+                        string uid = TryExtractUnitId(item, 3); // 嘗試自動抽出角色 ID。
+                        if (!string.IsNullOrEmpty(uid)) ids.Add(uid); // 加入候選。
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("[PROBE-UNITLIST] " + label + " error=" + ex.Message); // 清單讀取失敗保留原因。
+            }
+
+            if (ids.Count == 0)
+            {
+                Log("[RECOVER] " + label + " no world-unit ids extracted"); // 沒抽到有效角色 ID。
+                return false; // 無法恢復。
+            }
+
+            int saved = CollectFemalePrisonersFromMemberIds(ids, label); // 從抽出的 ID 保存女性 NPC。
+            Log("[RECOVER] " + label + " extractedIds=" + ids.Count + " saved=" + saved); // 回報結果。
+            return saved > 0; // 有保存到人才算成功。
+        }
+
         private static int GetIntMember(object obj, string name, int fallback)
         {
             try
@@ -843,6 +928,10 @@ namespace MOD_nV039M
             int playerCamp = GetIntMember(schoolWarData, "playerCamp", 0); // 讀取玩家陣營，1 通常代表攻方。
             object attackSchool = GetMemberValue(schoolWarData, "attackSchool"); // 攻方宗門 MapBuildSchool。
             object defendSchool = GetMemberValue(schoolWarData, "defendSchool"); // 守方宗門 MapBuildSchool。
+            object attackWarData = GetMemberValue(schoolWarData, "attackWarData"); // 攻方戰爭資料。
+            object defendWarData = GetMemberValue(schoolWarData, "defendWarData"); // 守方戰爭資料。
+            object attackUnits = GetMemberValue(schoolWarData, "attackUnits"); // 攻方參戰單位清單。
+            object defendUnits = GetMemberValue(schoolWarData, "defendUnits"); // 守方參戰單位清單。
             bool defendDead = false; // 守方是否滅宗。
             try { defendDead = Convert.ToBoolean(GetMemberValue(schoolWarData, "defendSchoolDie")); } catch { }
 
@@ -850,22 +939,26 @@ namespace MOD_nV039M
 
             if (playerCamp == 1)
             {
-                if (TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.enemy")) return true; // 玩家為攻方時，敵方通常是守方宗門。
-                if (TryRecoverPrisonersFromCandidate(attackSchool, "schoolWarData.attackSchool.fallback")) return true; // 防止 playerCamp 語義不同，保留 fallback。
+                if (TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.enemy")) return true; // 玩家為攻方時，敵方是守方宗門；不能 fallback 到攻方，否則會抓自己人。
+                DeepProbeObject(defendWarData, "schoolWarData.defendWarData.enemy", 1); // 守方宗門已變成分舵時，改看守方戰爭資料。
+                if (TryRecoverFromSchoolWarUnitList(defendUnits, "schoolWarData.defendUnits.enemy")) return true; // 嘗試從守方參戰單位救援。
+                Log("[RECOVER] enemy defendSchool unavailable; refusing to fallback to attackSchool to avoid capturing own sect"); // 明確拒絕抓自己宗門。
             }
             else if (playerCamp == 2)
             {
-                if (TryRecoverPrisonersFromCandidate(attackSchool, "schoolWarData.attackSchool.enemy")) return true; // 玩家為守方時，敵方通常是攻方宗門。
-                if (TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.fallback")) return true; // 防止 playerCamp 語義不同，保留 fallback。
+                if (TryRecoverPrisonersFromCandidate(attackSchool, "schoolWarData.attackSchool.enemy")) return true; // 玩家為守方時，敵方是攻方宗門；不能 fallback 到守方。
+                DeepProbeObject(attackWarData, "schoolWarData.attackWarData.enemy", 1); // 攻方資料救不到時，深挖攻方戰爭資料。
+                if (TryRecoverFromSchoolWarUnitList(attackUnits, "schoolWarData.attackUnits.enemy")) return true; // 嘗試從攻方參戰單位救援。
+                Log("[RECOVER] enemy attackSchool unavailable; refusing to fallback to defendSchool to avoid capturing own sect"); // 明確拒絕抓自己宗門。
             }
             else
             {
                 if (defendDead && TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.dead")) return true; // 不知道陣營時，優先抓已滅的守方。
-                if (TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.unknown")) return true; // 再試守方。
-                if (TryRecoverPrisonersFromCandidate(attackSchool, "schoolWarData.attackSchool.unknown")) return true; // 最後試攻方。
+                if (TryRecoverFromSchoolWarUnitList(defendUnits, "schoolWarData.defendUnits.unknown")) return true; // 再試守方參戰單位。
+                Log("[RECOVER] unknown playerCamp; not trying attackSchool fallback automatically"); // 不明陣營時也避免亂抓攻方。
             }
 
-            return false; // attack/defend 宗門物件都救不到。
+            return false; // 敵方資料救不到。
         }
 
         private static bool TryRecoverFromAnyStringLists(object obj, string label)

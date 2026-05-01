@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.1.9] - 2026-05-02
+
+### Fixed
+- 移除敵方恢復失敗後跨陣營 fallback，避免 `playerCamp=1` 時抓到自己的 `attackSchool` 成員。
+
+### Added
+- 深挖 `attackWarData/defendWarData` 與 `attackUnits/defendUnits`，尋找戰敗方參戰單位 ID。
+
+### Changed
+- MOD log 版號更新為 `v34`。
+
 ## [1.1.8] - 2026-05-02
 
 ### Added
