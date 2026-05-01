@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.3] - 2026-05-02
+
+### Fixed
+- 補上 Steam Workshop 安裝結構搜尋：`steamapps/workshop/content/1468810/<workshop-id>/ModCode/MOD_nV039M.dll`。
+- 同時支援 DLL 位於 `ModCode/MOD_nV039M.dll` 與本地匯出的 `ModCode/dll/MOD_nV039M.dll`。
+
+### Changed
+- MOD log 版號更新為 `v28`。
+
 ## [1.1.2] - 2026-05-02
 
 ### Fixed

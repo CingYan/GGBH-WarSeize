@@ -26,7 +26,7 @@ namespace MOD_nV039M
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v27";
+        private const string VERSION = "v28";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -39,7 +39,8 @@ namespace MOD_nV039M
         private static bool worldEnterHooked = false;
         private static bool arrestPatched = false;
         private const string SAVE_FILE_PREFIX = "warhistory_"; // 歷史記錄檔名前綴，集中管理避免到處硬寫字串。
-        private const string MOD_DLL_NAME = "MOD_nV039M.dll"; // MOD 匯出後的 DLL 檔名，用於 Assembly.Location 為空時從 ModExportData 反查真實目錄。
+        private const string MOD_DLL_NAME = "MOD_nV039M.dll"; // MOD 匯出後的 DLL 檔名，用於 Assembly.Location 為空時反查真實目錄。
+        private const string STEAM_GAME_ID = "1468810"; // 鬼谷八荒在 Steam Workshop content 底下使用的遊戲 ID。
         private static string modDir = null; // 目前 MOD DLL 所在目錄；啟動時動態解析，不再綁死 Steam 安裝路徑。
 
         private static void Log(string msg)
@@ -574,7 +575,7 @@ namespace MOD_nV039M
             string foundFromBase = FindModDllDirectory(baseDir); // 從遊戲根目錄反查 ModExportData 裡真正的 ModCode/dll。
             if (!string.IsNullOrEmpty(foundFromBase))
             {
-                Log("[PATH] assembly location empty, found mod dll from baseDir=" + foundFromBase); // v26 會停在 baseDir；v27 改成繼續找到 MOD DLL 目錄。
+                Log("[PATH] assembly location empty, found mod dll from baseDir=" + foundFromBase); // Assembly.Location 為空時，從本地 MOD 或 Workshop 結構反查 DLL 目錄。
                 return foundFromBase; // 存檔放回 MOD DLL 同層，避免寫到遊戲根目錄。
             }
 
@@ -602,31 +603,80 @@ namespace MOD_nV039M
 
             try
             {
-                string directDll = Path.Combine(rootDir, MOD_DLL_NAME); // 若 Loader 已經把工作目錄切到 dll 層，先檢查目前目錄。
+                string directDll = Path.Combine(rootDir, MOD_DLL_NAME); // 若 Loader 已經把工作目錄切到 DLL 同層，先檢查目前目錄。
                 if (File.Exists(directDll)) return rootDir; // 目前目錄就是 MOD DLL 目錄。
             }
             catch { }
 
+            string localDir = FindLocalExportModDllDirectory(rootDir); // 本地手動安裝 MOD：遊戲根目錄/ModExportData/Mod_xxx/ModCode[/dll]。
+            if (!string.IsNullOrEmpty(localDir)) return localDir; // 找到本地 MOD DLL 就直接回傳。
+
+            string workshopDir = FindWorkshopModDllDirectory(rootDir); // Steam 創意工坊 MOD：steamapps/workshop/content/1468810/itemId/ModCode。
+            if (!string.IsNullOrEmpty(workshopDir)) return workshopDir; // 找到 Workshop MOD DLL 就直接回傳。
+
+            return null; // 沒找到 MOD DLL，交給 ResolveModDirectory 的保底邏輯。
+        }
+
+        private static string FindLocalExportModDllDirectory(string gameRootDir)
+        {
             try
             {
-                string exportRoot = Path.Combine(rootDir, "ModExportData"); // 鬼谷八荒 MOD 匯出資料夾。
-                if (!Directory.Exists(exportRoot)) return null; // 沒有 ModExportData 就不掃，避免亂跑整個硬碟。
+                string exportRoot = Path.Combine(gameRootDir, "ModExportData"); // 本地 MOD 匯出資料夾。
+                if (!Directory.Exists(exportRoot)) return null; // 沒有 ModExportData 代表不是本地匯出結構。
 
-                string expectedByNamespace = Path.Combine(exportRoot, typeof(ModMain).Namespace, "ModCode", "dll", MOD_DLL_NAME); // 優先用 namespace 對應的 MOD ID 找 DLL。
-                if (File.Exists(expectedByNamespace)) return Path.GetDirectoryName(expectedByNamespace); // 找到就回傳 ModCode/dll。
+                string expectedByNamespace = FindDllUnderModRoot(Path.Combine(exportRoot, typeof(ModMain).Namespace)); // 優先用 namespace 對應的 MOD ID 找 DLL。
+                if (!string.IsNullOrEmpty(expectedByNamespace)) return expectedByNamespace; // 找到就回傳 DLL 所在目錄。
 
                 foreach (string modRoot in Directory.GetDirectories(exportRoot))
                 {
-                    string dllPath = Path.Combine(modRoot, "ModCode", "dll", MOD_DLL_NAME); // 掃每個 MOD 的標準 DLL 位置。
-                    if (File.Exists(dllPath)) return Path.GetDirectoryName(dllPath); // 找到本 MOD DLL 就回傳該目錄。
+                    string dllDir = FindDllUnderModRoot(modRoot); // 掃每個本地 MOD 的標準 DLL 位置。
+                    if (!string.IsNullOrEmpty(dllDir)) return dllDir; // 找到本 MOD DLL 就回傳該目錄。
                 }
             }
             catch (Exception ex)
             {
-                Log("[PATH] FindModDllDirectory error: " + ex.Message); // 搜尋失敗保留原因，方便判斷權限或路徑問題。
+                Log("[PATH] FindLocalExportModDllDirectory error: " + ex.Message); // 本地 MOD 搜尋失敗時保留原因。
             }
 
-            return null; // 沒找到 MOD DLL，交給 ResolveModDirectory 的保底邏輯。
+            return null; // 本地結構沒有找到。
+        }
+
+        private static string FindWorkshopModDllDirectory(string gameRootDir)
+        {
+            try
+            {
+                DirectoryInfo gameRoot = new DirectoryInfo(gameRootDir); // 遊戲根目錄通常是 steamapps/common/鬼谷八荒。
+                DirectoryInfo steamApps = gameRoot.Parent == null ? null : gameRoot.Parent.Parent; // 從 common/鬼谷八荒 往上推回 steamapps。
+                if (steamApps == null || !steamApps.Exists) return null; // 找不到 steamapps 就不能推 Workshop 路徑。
+
+                string workshopRoot = Path.Combine(steamApps.FullName, "workshop", "content", STEAM_GAME_ID); // Steam Workshop 對應遊戲的 content 目錄。
+                if (!Directory.Exists(workshopRoot)) return null; // 沒訂閱 Workshop 或 library 不同時，這裡可能不存在。
+
+                foreach (string itemRoot in Directory.GetDirectories(workshopRoot))
+                {
+                    string dllDir = FindDllUnderModRoot(itemRoot); // 每個 itemId 下面檢查 ModCode[/dll]/MOD_nV039M.dll。
+                    if (!string.IsNullOrEmpty(dllDir)) return dllDir; // 找到本 MOD DLL 就回傳 Workshop 的 ModCode 目錄。
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("[PATH] FindWorkshopModDllDirectory error: " + ex.Message); // Workshop 搜尋失敗時保留原因。
+            }
+
+            return null; // Workshop 結構沒有找到。
+        }
+
+        private static string FindDllUnderModRoot(string modRoot)
+        {
+            if (string.IsNullOrEmpty(modRoot) || !Directory.Exists(modRoot)) return null; // MOD 根目錄不存在就跳過。
+
+            string dllInModCode = Path.Combine(modRoot, "ModCode", MOD_DLL_NAME); // Workshop 常見結構：itemId/ModCode/MOD_nV039M.dll。
+            if (File.Exists(dllInModCode)) return Path.GetDirectoryName(dllInModCode); // 回傳 ModCode 目錄。
+
+            string dllInNestedDll = Path.Combine(modRoot, "ModCode", "dll", MOD_DLL_NAME); // 本地匯出常見結構：Mod_xxx/ModCode/dll/MOD_nV039M.dll。
+            if (File.Exists(dllInNestedDll)) return Path.GetDirectoryName(dllInNestedDll); // 回傳 ModCode/dll 目錄。
+
+            return null; // 這個 MOD 根目錄不是本 MOD。
         }
 
         private static void RestorePrisonersFromRecordIfNeeded()
