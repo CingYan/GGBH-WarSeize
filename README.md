@@ -28,7 +28,7 @@
 
 ### 操作流程
 1. 在 [Steam 工作坊訂閱本 MOD](https://steamcommunity.com/sharedfiles/filedetails/?id=3683459718)（或手動放入 `ModExportData/` 資料夾）
-2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v34) ===`
+2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v35) ===`
 3. 以宗主身份發起滅宗戰
 4. 打完宗門戰後，MOD 自動觸發處置序列
 5. 依照劇情選項決定每位戰俘的命運
@@ -114,6 +114,11 @@ DLL 注入解決了這些問題，實現了完全自動化。
 ---
 
 ## 📝 更新日誌
+
+### v1.1.10 (2026-05-02)
+- 🧭 `IntoWorld` 後延遲 120 frame 掃描 `SchoolWar.schoolWarData`，在讀檔時間點先保存敵方宗門 hint
+- 🔍 新增 `[WORLD-HINT]` log，可同時比較讀檔與戰後 `SchoolWar` 狀態
+- 🏷️ 內部 MOD log 版號更新為 `v35`
 
 ### v1.1.9 (2026-05-02)
 - 🛡️ 移除敵方恢復失敗後跨陣營 fallback，避免 `playerCamp=1` 時抓到自己的 `attackSchool` 成員

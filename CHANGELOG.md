@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.10] - 2026-05-02
+
+### Added
+- `IntoWorld` 後延遲 120 frame 掃描 `SchoolWar.schoolWarData`，在讀檔時間點先保存敵方宗門 hint。
+- 新增 `[WORLD-HINT]` log，可同時比較讀檔與戰後 `SchoolWar` 狀態。
+
+### Changed
+- MOD log 版號更新為 `v35`。
+
 ## [1.1.9] - 2026-05-02
 
 ### Fixed

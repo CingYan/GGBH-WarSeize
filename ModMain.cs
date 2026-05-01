@@ -26,7 +26,7 @@ namespace MOD_nV039M
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v34";
+        private const string VERSION = "v35";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -1055,6 +1055,88 @@ namespace MOD_nV039M
             }
         }
 
+
+
+        private static SchoolWar FindActiveSchoolWar()
+        {
+            try
+            {
+                object obj = UnityEngine.Object.FindObjectOfType(typeof(SchoolWar)); // IntoWorld 後嘗試從場景找目前存在的 SchoolWar 元件。
+                return obj as SchoolWar; // 找得到就回傳，找不到代表戰爭資料可能尚未初始化。
+            }
+            catch (Exception ex)
+            {
+                Log("[WORLD-HINT] FindActiveSchoolWar error: " + ex.Message); // 保留 Unity 查找失敗原因。
+                return null; // 查找失敗時交給戰後 SchoolWarClear 再補抓。
+            }
+        }
+
+        private static void TryCaptureWarHintAfterWorldEnter()
+        {
+            try
+            {
+                Log("[WORLD-HINT] delayed scan start"); // 讀檔後延遲掃描，讓遊戲世界與戰爭資料有時間初始化。
+                LoadAllRecords(); // 讀取目前 warhistory，避免重複建立同一場紀錄。
+
+                var existing = GetCurrentRecord(); // 檢查是否已有未完成紀錄。
+                if (existing != null && existing.prisoners != null && existing.prisoners.Count > 0)
+                {
+                    Log("[WORLD-HINT] skip: pending record already has prisoners phase=" + existing.phase + " school=" + existing.schoolID + " count=" + existing.prisoners.Count); // 已有名單就不覆蓋。
+                    return; // 避免讀檔掃描覆寫宣戰當下保存的正確名單。
+                }
+
+                SchoolWar sw = FindActiveSchoolWar(); // 嘗試找場景中的 SchoolWar。
+                if (sw == null)
+                {
+                    Log("[WORLD-HINT] no active SchoolWar found"); // 讀檔當下沒有 SchoolWar，代表只能靠戰後 Clear 或更早 hook。
+                    return; // 沒有 instance 就無法抓 hint。
+                }
+
+                object schoolWarData = GetMemberValue(sw, "schoolWarData"); // 取得戰爭狀態資料。
+                if (schoolWarData == null)
+                {
+                    Log("[WORLD-HINT] SchoolWar found but schoolWarData is null"); // 有元件但資料未建立。
+                    return; // 無資料就停止。
+                }
+
+                HashSet<string> backup = new HashSet<string>(savedPrisonerIds); // 備份目前記憶體名單，避免掃描失敗清掉狀態。
+                string backupSchool = targetSchoolID; // 備份目前宗門 ID。
+                savedPrisonerIds.Clear(); // 讀檔 hint 只保存這次掃到的敵方名單。
+                targetSchoolID = null; // 讓本次掃描重新決定敵方宗門 ID。
+
+                DeepProbeObject(schoolWarData, "worldHint.schoolWarData", 1); // 讀檔時間點也列出戰爭狀態，方便和戰後 Clear 對照。
+                bool ok = TryRecoverFromSchoolWarDataSchools(schoolWarData); // 用同一套敵方判斷抓取讀檔時的敵方名單。
+
+                if (!ok || savedPrisonerIds.Count == 0)
+                {
+                    Log("[WORLD-HINT] no prisoners captured from load-time SchoolWar state"); // 讀檔時抓不到名單。
+                    savedPrisonerIds = backup; // 還原原本名單。
+                    targetSchoolID = backupSchool; // 還原原本宗門 ID。
+                    return; // 等戰後 Clear 再比對。
+                }
+
+                LoadAllRecords(); // 準備寫入 hint record 前重新讀檔。
+                var rec = GetCurrentRecord(); // 若有空 pending record，直接補上；否則新增。
+                if (rec == null || rec.prisoners == null || rec.prisoners.Count > 0)
+                {
+                    rec = new WarRecord(); // 建立讀檔 hint 紀錄。
+                    allRecords.Add(rec); // 加入歷史紀錄。
+                }
+
+                rec.schoolID = string.IsNullOrEmpty(targetSchoolID) ? "world-hint" : targetSchoolID; // 保存讀檔時判定的敵方宗門 ID。
+                rec.phase = "pre-war"; // 讀檔 hint 等同宣戰後、戰前紀錄，讓 SchoolWarClear 可直接 restore。
+                rec.gameTime = GetGameTime(); // 保存目前遊戲時間。
+                rec.index = 0; // 尚未開始處理戰俘。
+                rec.prisoners = new List<string>(savedPrisonerIds); // 保存讀檔時抓到的敵方女性名單。
+                SaveAllRecords(); // 寫入遊戲根目錄 warhistory。
+                Log("[WORLD-HINT] saved load-time hint school=" + rec.schoolID + " prisoners=" + rec.prisoners.Count); // 回報讀檔抓取成功。
+            }
+            catch (Exception ex)
+            {
+                Log("[WORLD-HINT] delayed scan error: " + ex.Message); // 延遲掃描不能影響遊戲主流程。
+            }
+        }
+
         private static void RecoverPrisonersFromSchoolWarState(SchoolWar instance)
         {
             if (instance == null) return; // 沒有 instance 就不能從 SchoolWar 狀態恢復。
@@ -1409,6 +1491,15 @@ namespace MOD_nV039M
 
             LoadAllRecords();
             EnsureRecordFileExists(); // 第一次進世界也建立空 warhistory 檔，避免誤以為路徑解析成功但無法寫入。
+            try
+            {
+                g.timer.Frame(new Action(() => { TryCaptureWarHintAfterWorldEnter(); }), 120, false); // 讀檔後延遲 120 frame，同步抓一次戰前/戰中 SchoolWar 線索。
+                Log("[WORLD-HINT] scheduled delayed scan 120f"); // 讓 log 可確認讀檔掃描有排程。
+            }
+            catch (Exception ex)
+            {
+                Log("[WORLD-HINT] schedule error: " + ex.Message); // 排程失敗不影響原本讀檔恢復流程。
+            }
             int currentTime = GetGameTime();
             Log("[WORLD] gameTime=" + currentTime + " records=" + allRecords.Count);
 
