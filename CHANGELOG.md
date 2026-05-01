@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.1] - 2026-05-02
+
+### Fixed
+- 移除 `ModMain.cs` 內固定 `D:\SteamLibrary...` 開發機路徑，改由目前載入的 DLL 動態解析 MOD 目錄。
+- 宗門戰結束時先從 `warhistory_{玩家ID}.json` 恢復宣戰名單，再進行 fallback 掃描，避免重裝或換位置後記憶體名單清空就直接 `found=0`。
+
+### Changed
+- MOD log 版號更新為 `v26`。
+- 增加 `[PATH]`、`[RESTORE]`、`[REBUILD]` 細節 log，方便確認實際讀寫路徑與人物掃描條件。
+
 ## [1.1.0] - 2026-04-07
 
 ### Added

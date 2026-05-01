@@ -26,7 +26,7 @@ namespace MOD_nV039M
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v25";
+        private const string VERSION = "v26";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -38,7 +38,8 @@ namespace MOD_nV039M
         private static bool keyCheckRunning = false;
         private static bool worldEnterHooked = false;
         private static bool arrestPatched = false;
-        private static string modDir = null;
+        private const string SAVE_FILE_PREFIX = "warhistory_"; // 歷史記錄檔名前綴，集中管理避免到處硬寫字串。
+        private static string modDir = null; // 目前 MOD DLL 所在目錄；啟動時動態解析，不再綁死 Steam 安裝路徑。
 
         private static void Log(string msg)
         {
@@ -113,20 +114,9 @@ namespace MOD_nV039M
                 Log("FAIL Harmony: " + ex.Message);
             }
 
-            // mod root dir for save files
-            modDir = @"D:\SteamLibrary\steamapps\common\鬼谷八荒\ModExportData\Mod_nV039M\ModCode\dll";
-            try
-            {
-                string asmLoc = typeof(ModMain).Assembly.Location;
-                if (!string.IsNullOrEmpty(asmLoc))
-                {
-                    string asmDir = Path.GetDirectoryName(asmLoc);
-                    if (!string.IsNullOrEmpty(asmDir))
-                        modDir = asmDir;
-                }
-            }
-            catch { }
-            Log("modDir=" + modDir);
+            modDir = ResolveModDirectory(); // 從目前載入的 DLL 反推目錄，避免換硬碟、換 Steam Library 或換 MOD ID 後失效。
+            Log("[PATH] modDir=" + modDir); // 啟動時印出實際讀寫位置，方便 debug 找不到 warhistory 的問題。
+            Log("[PATH] saveProbe=" + GetSaveFilePath()); // 同步印出完整存檔路徑，確認 MOD 實際會讀哪個檔案。
 
             // hook IntoWorld event for save-load recovery
             if (!worldEnterHooked)
@@ -562,14 +552,68 @@ namespace MOD_nV039M
             }
         }
 
+
+        private static string ResolveModDirectory()
+        {
+            // 優先使用 ModMain 所在 Assembly，這是 MelonLoader 實際載入 DLL 的位置。
+            string asmLoc = null; // 先記錄 Assembly.Location，後續每個 fallback 都會寫 log。
+            try { asmLoc = typeof(ModMain).Assembly.Location; } catch { asmLoc = null; } // 某些 IL2CPP 情境可能取不到 Location，所以不能讓它中斷 Init。
+
+            if (!string.IsNullOrEmpty(asmLoc))
+            {
+                string asmDir = Path.GetDirectoryName(asmLoc); // DLL 檔案所在資料夾，通常就是 ModCode/dll。
+                if (!string.IsNullOrEmpty(asmDir) && Directory.Exists(asmDir))
+                {
+                    Log("[PATH] assembly=" + asmLoc); // 明確記錄 DLL 來源，避免再誤判成固定 D 槽路徑。
+                    return asmDir; // 存檔放在實際 DLL 同層，MOD 搬家後會跟著新位置走。
+                }
+            }
+
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory; // Assembly 位置不可用時，退回遊戲/Loader 的基準目錄。
+            if (!string.IsNullOrEmpty(baseDir) && Directory.Exists(baseDir))
+            {
+                Log("[PATH] assembly location empty, fallback baseDir=" + baseDir); // fallback 也要可追蹤。
+                return baseDir; // 保底仍然使用 runtime 提供的目錄，不使用任何硬寫入安裝路徑。
+            }
+
+            string currentDir = Environment.CurrentDirectory; // 最後保底：目前工作目錄。
+            Log("[PATH] fallback currentDir=" + currentDir); // 如果走到這裡，代表環境很異常，log 需要明確。
+            return string.IsNullOrEmpty(currentDir) ? "." : currentDir; // 永遠回傳可組路徑的值，避免 GetSaveFilePath 產生 null。
+        }
+
+        private static void RestorePrisonersFromRecordIfNeeded()
+        {
+            if (savedPrisonerIds.Count > 0) return; // 記憶體已有宣戰名單時不覆蓋，避免重複讀檔打亂當前流程。
+
+            LoadAllRecords(); // 從 warhistory 讀回宣戰時保存的 NPC ID，這是戰後找人的主要來源。
+            var rec = GetCurrentRecord(); // 取最後一筆尚未完成的宗門戰紀錄。
+            if (rec == null)
+            {
+                Log("[RESTORE] no pending record at " + GetSaveFilePath()); // 找不到紀錄時把路徑打出來，方便確認是不是裝到新位置。
+                return; // 沒紀錄就交給後續 rebuild fallback。
+            }
+
+            foreach (string uid in rec.prisoners)
+            {
+                if (!string.IsNullOrEmpty(uid)) savedPrisonerIds.Add(uid); // 只恢復有效 ID，避免空字串進入處置序列。
+            }
+            targetSchoolID = rec.schoolID; // 同步恢復宗門 ID，後續 debug log 才知道是哪場戰。
+            Log("[RESTORE] restored " + savedPrisonerIds.Count + " prisoners from record phase=" + rec.phase + " school=" + rec.schoolID); // 明確區分讀檔恢復與動態掃描。
+        }
+
         // =============================================================
         // File persistence (JSON records)
         // =============================================================
         private static string GetSaveFilePath()
         {
-            string playerID = "unknown";
-            try { playerID = g.world.playerUnit.data.unitData.unitID; } catch { }
-            return Path.Combine(modDir ?? ".", "warhistory_" + playerID + ".json");
+            string playerID = "unknown"; // 以玩家 ID 分檔，避免不同角色的宗門戰紀錄互相污染。
+            try { playerID = g.world.playerUnit.data.unitData.unitID; } catch { } // 尚未進世界時可能拿不到玩家，保留 unknown 供啟動探測使用。
+
+            string saveDir = modDir; // 存檔目錄統一走 ResolveModDirectory 的結果，不再出現固定 D 槽路徑。
+            if (string.IsNullOrEmpty(saveDir)) saveDir = ResolveModDirectory(); // 若 Init 前被呼叫，仍即時解析一次。
+
+            try { Directory.CreateDirectory(saveDir); } catch { } // 確保 fallback 目錄存在；失敗時讓後續 File I/O log 真正錯誤。
+            return Path.Combine(saveDir, SAVE_FILE_PREFIX + playerID + ".json"); // 組出完整 warhistory 路徑。
         }
 
         private static int GetGameTime()
@@ -703,8 +747,12 @@ namespace MOD_nV039M
             try
             {
                 string path = GetSaveFilePath();
-                if (!File.Exists(path)) return;
-                string json = File.ReadAllText(path);
+                if (!File.Exists(path))
+                {
+                    Log("[FILE] no record file at " + path); // 讀不到檔時輸出完整路徑，方便定位是不是 MOD 安裝位置不同。
+                    return; // 沒有歷史檔不是錯誤，可能是第一次使用。
+                }
+                string json = File.ReadAllText(path); // 讀取目前玩家的宗門戰歷史紀錄。
                 allRecords = ParseRecordsFromJson(json);
                 Log("[FILE] loaded " + allRecords.Count + " records from " + Path.GetFileName(path));
             }
@@ -720,8 +768,8 @@ namespace MOD_nV039M
             {
                 string path = GetSaveFilePath();
                 string json = RecordsToJson(allRecords);
-                File.WriteAllText(path, json);
-                Log("[FILE] saved " + allRecords.Count + " records -> " + Path.GetFileName(path));
+                File.WriteAllText(path, json); // 寫入動態解析出的 MOD 目錄，不再寫入固定開發機路徑。
+                Log("[FILE] saved " + allRecords.Count + " records -> " + path); // 保存完整路徑，讓測試者可直接確認檔案位置。
             }
             catch (Exception ex)
             {
@@ -817,31 +865,47 @@ namespace MOD_nV039M
 
         private static void RebuildPrisonerList()
         {
-            savedPrisonerIds.Clear();
+            savedPrisonerIds.Clear(); // 清空舊掃描結果，避免 fallback 結果和宣戰紀錄混在一起。
+            int scanned = 0; // 掃過的 world unit 數量，用來判斷是不是 allUnit 尚未載入。
+            int female = 0; // 女性 NPC 數量，用來判斷 sex 條件是否正常。
+            int noSchool = 0; // 無宗門女性數量，用來判斷戰後脫離宗門狀態是否存在。
+            int anger = 0; // 帶憤怒氣運的人數，用來判斷抓取表條件是否存在。
+
             try
             {
-                var allUnit = g.world.unit.allUnit;
-                var enumerator = allUnit.GetEnumerator();
+                var allUnit = g.world.unit.allUnit; // fallback 掃描目前世界裡仍存在的 NPC。
+                var enumerator = allUnit.GetEnumerator(); // Il2Cpp collection 以 enumerator 逐一讀取。
                 while (enumerator.MoveNext())
                 {
                     try
                     {
-                        var pair = enumerator.Current;
-                        WorldUnitBase unit = pair.Value;
-                        if (unit == null) continue;
-                        var ud = unit.data.unitData;
-                        var pd = ud.propertyData;
-                        if ((int)pd.sex != 2) continue;
-                        if (!string.IsNullOrEmpty(ud.schoolID)) continue;
-                        if (!HasLuckId(pd, ANGER_LUCK_ID)) continue;
-                        savedPrisonerIds.Add(pair.Key);
-                        Log("[REBUILD] " + pd.GetName() + " id=" + pair.Key);
+                        var pair = enumerator.Current; // pair.Key 是 NPC runtime ID，pair.Value 是 WorldUnitBase。
+                        WorldUnitBase unit = pair.Value; // 取出 NPC 單位。
+                        if (unit == null) continue; // 空單位跳過。
+                        scanned++; // 計算實際掃描量。
+
+                        var ud = unit.data.unitData; // 角色基礎資料。
+                        var pd = ud.propertyData; // 角色屬性資料。
+                        if ((int)pd.sex != 2) continue; // 只處理女性 NPC。
+                        female++; // 計算女性數量。
+
+                        if (!string.IsNullOrEmpty(ud.schoolID)) continue; // 戰後戰俘通常應已無宗門；仍有宗門者跳過。
+                        noSchool++; // 計算無宗門女性數量。
+
+                        if (!HasLuckId(pd, ANGER_LUCK_ID)) continue; // fallback 只接受已有憤怒氣運者，避免誤抓路人。
+                        anger++; // 計算符合抓取表氣運條件的人數。
+
+                        savedPrisonerIds.Add(pair.Key); // 加入 fallback 戰俘名單。
+                        Log("[REBUILD] " + pd.GetName() + " id=" + pair.Key); // 列出被 fallback 抓到的人。
                     }
                     catch { }
                 }
             }
-            catch { }
-            Log("[REBUILD] found " + savedPrisonerIds.Count);
+            catch (Exception ex)
+            {
+                Log("[REBUILD] scan error: " + ex.Message); // 掃描本身失敗時保留錯誤訊息。
+            }
+            Log("[REBUILD] scanned=" + scanned + " female=" + female + " noSchool=" + noSchool + " anger=" + anger + " found=" + savedPrisonerIds.Count); // 比單純 found=0 更容易定位卡在哪個條件。
         }
 
         private static void RemoveAngerLuck(string uid)
@@ -1118,8 +1182,14 @@ namespace MOD_nV039M
 
                 if (savedPrisonerIds.Count == 0)
                 {
-                    Log("[CLEAR] rebuilding prisoner list");
-                    RebuildPrisonerList();
+                    Log("[CLEAR] restoring prisoner list from warhistory"); // 戰後優先讀宣戰時保存的名單，而不是直接用氣運硬掃。
+                    RestorePrisonersFromRecordIfNeeded(); // 解決換 MOD 安裝位置或 reload 後記憶體名單清空的問題。
+                }
+
+                if (savedPrisonerIds.Count == 0)
+                {
+                    Log("[CLEAR] rebuilding prisoner list fallback"); // 只有沒有 warhistory 時才進入 fallback 掃描。
+                    RebuildPrisonerList(); // fallback 保守掃描，避免亂抓非戰俘 NPC。
                 }
 
                 int found = 0;

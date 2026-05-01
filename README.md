@@ -28,7 +28,7 @@
 
 ### 操作流程
 1. 在 [Steam 工作坊訂閱本 MOD](https://steamcommunity.com/sharedfiles/filedetails/?id=3683459718)（或手動放入 `ModExportData/` 資料夾）
-2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v25) ===`
+2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v26) ===`
 3. 以宗主身份發起滅宗戰
 4. 打完宗門戰後，MOD 自動觸發處置序列
 5. 依照劇情選項決定每位戰俘的命運
@@ -64,7 +64,7 @@ Mod_nV039M/
 ```
 
 ### 歷史記錄檔
-MOD 運行時會在 DLL 同目錄下生成 `warhistory_{玩家ID}.json`：
+MOD 運行時會從實際載入的 DLL 位置動態解析目錄，並在該目錄生成 `warhistory_{玩家ID}.json`，不再綁定固定 Steam 安裝路徑：
 ```json
 {
   "records": [
@@ -114,6 +114,12 @@ DLL 注入解決了這些問題，實現了完全自動化。
 ---
 
 ## 📝 更新日誌
+
+### v1.1.1 (2026-05-02)
+- 🐛 移除開發機 `D:\SteamLibrary...` 硬寫入路徑，改由目前載入的 DLL 動態解析 MOD 目錄
+- 🐛 宗門戰結束時優先從 `warhistory` 恢復宣戰名單，再進入 fallback 掃描，降低重裝/換位置後 `found=0` 的機率
+- 🔍 增加 `[PATH]`、`[RESTORE]`、`[REBUILD] scanned/female/noSchool/anger/found` debug log，方便定位找不到人物卡在哪一層
+- 🏷️ 內部 MOD log 版號更新為 `v26`
 
 ### v1.1.0 (2026-04-07)
 - 🆕 DLL 代碼注入，實現全自動處置流程
