@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.12] - 2026-05-02
+
+### Fixed
+- 依最新戰後 log，優先從 `schoolWarData.defendUnits[].unit` / `attackUnits[].unit` 直接抽 `WorldUnitBase`，再用 `allUnit` 對回 ID 並篩女性戰俘。
+- 宗門 `buildData` 改為最後備援，避免守方宗門被改寫成分舵後依賴錯誤來源。
+
+### Changed
+- MOD log 版號更新為 `v37`。
+
 ## [1.1.11] - 2026-05-02
 
 ### Fixed

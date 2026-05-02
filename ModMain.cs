@@ -26,7 +26,7 @@ namespace MOD_nV039M
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v36";
+        private const string VERSION = "v37";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -872,10 +872,64 @@ namespace MOD_nV039M
             catch { return false; }
         }
 
+        private static WorldUnitBase TryExtractWorldUnitBase(object obj, int depth)
+        {
+            if (obj == null || depth <= 0) return null; // 空物件或深度用完就停止。
+            try
+            {
+                WorldUnitBase direct = obj as WorldUnitBase; // v37：SchoolWar UnitData.unit 已確認就是 WorldUnitBase。
+                if (direct != null) return direct; // 直接拿到角色物件就回傳。
+            }
+            catch { }
+
+            string[] childNames = new string[] { "unit", "Unit", "worldUnit", "WorldUnit", "unitData", "UnitData", "data", "Data", "baseData", "BaseData" }; // 常見巢狀角色物件欄位。
+            foreach (string childName in childNames)
+            {
+                try
+                {
+                    object child = GetMemberValue(obj, childName); // 讀巢狀物件。
+                    WorldUnitBase unit = TryExtractWorldUnitBase(child, depth - 1); // 往下一層找 WorldUnitBase。
+                    if (unit != null) return unit; // 找到就回傳。
+                }
+                catch { }
+            }
+
+            return null; // 找不到 WorldUnitBase。
+        }
+
+        private static string TryResolveWorldUnitId(WorldUnitBase unit)
+        {
+            if (unit == null) return null; // 空角色不能解析 ID。
+            try
+            {
+                string uid = unit.data.unitData.unitID; // 先用角色自身 unitID。
+                if (!string.IsNullOrEmpty(uid) && HasWorldUnit(uid)) return uid; // 必須能對回 allUnit 才接受。
+            }
+            catch { }
+
+            try
+            {
+                var enumerator = g.world.unit.allUnit.GetEnumerator(); // unitID 不可靠時，用 allUnit 反查同一個物件。
+                while (enumerator.MoveNext())
+                {
+                    try
+                    {
+                        var pair = enumerator.Current; // pair.Key 是 runtime id，pair.Value 是 WorldUnitBase。
+                        if (pair.Value == unit) return pair.Key; // 找到相同角色物件。
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+
+            return null; // 無法解析可持久化 ID。
+        }
+
         private static bool TryRecoverFromSchoolWarUnitList(object listObj, string label)
         {
             if (listObj == null) return false; // 沒清單就不能恢復。
-            HashSet<string> ids = new HashSet<string>(); // 收集可對回 allUnit 的角色 ID。
+            HashSet<string> directUnitIds = new HashSet<string>(); // v37：從 UnitData.unit 直接抽出的 WorldUnitBase ID。
+            HashSet<string> fallbackIds = new HashSet<string>(); // 舊版反射 ID 備援。
 
             try
             {
@@ -889,9 +943,18 @@ namespace MOD_nV039M
                         object item = d[i]; // 取出 UnitData。
                         if (item == null) continue; // 空項跳過。
                         Log("[PROBE-UNITLIST] " + label + "[" + i + "] type=" + item.GetType().Name + " value=" + item.ToString()); // 印出項目型別。
-                        DeepProbeObject(item, label + "[" + i + "]", 1); // 深挖 UnitData 欄位，找真正角色 ID 名稱。
-                        string uid = TryExtractUnitId(item, 3); // 嘗試自動抽出角色 ID。
-                        if (!string.IsNullOrEmpty(uid)) ids.Add(uid); // 加入候選。
+
+                        WorldUnitBase directUnit = TryExtractWorldUnitBase(item, 3); // v37：優先從 defendUnits[].unit / attackUnits[].unit 抽 WorldUnitBase。
+                        string directUid = TryResolveWorldUnitId(directUnit); // 將 WorldUnitBase 轉成可寫入 warhistory 的 runtime id。
+                        if (!string.IsNullOrEmpty(directUid))
+                        {
+                            directUnitIds.Add(directUid); // 直接命中就加入主候選。
+                            continue; // 不再依賴 DeepProbe / buildData。
+                        }
+
+                        DeepProbeObject(item, label + "[" + i + "]", 1); // 直接抽不到才深挖 UnitData 欄位，保留下一輪 debug 資料。
+                        string uid = TryExtractUnitId(item, 3); // 舊版備援：嘗試自動抽出角色 ID。
+                        if (!string.IsNullOrEmpty(uid)) fallbackIds.Add(uid); // 加入備援候選。
                     }
                     catch { }
                 }
@@ -901,15 +964,22 @@ namespace MOD_nV039M
                 Log("[PROBE-UNITLIST] " + label + " error=" + ex.Message); // 清單讀取失敗保留原因。
             }
 
-            if (ids.Count == 0)
+            if (directUnitIds.Count > 0)
+            {
+                int saved = CollectFemalePrisonersFromMemberIds(directUnitIds, label + ".unit"); // v37 主路徑：直接從 WorldUnitBase 篩女性。
+                Log("[RECOVER] " + label + " directWorldUnits=" + directUnitIds.Count + " saved=" + saved); // 回報直接抽取結果。
+                if (saved > 0) return true; // 有保存到人才算成功。
+            }
+
+            if (fallbackIds.Count == 0)
             {
                 Log("[RECOVER] " + label + " no world-unit ids extracted"); // 沒抽到有效角色 ID。
                 return false; // 無法恢復。
             }
 
-            int saved = CollectFemalePrisonersFromMemberIds(ids, label); // 從抽出的 ID 保存女性 NPC。
-            Log("[RECOVER] " + label + " extractedIds=" + ids.Count + " saved=" + saved); // 回報結果。
-            return saved > 0; // 有保存到人才算成功。
+            int fallbackSaved = CollectFemalePrisonersFromMemberIds(fallbackIds, label + ".fallback"); // 反射 ID 備援。
+            Log("[RECOVER] " + label + " fallbackIds=" + fallbackIds.Count + " saved=" + fallbackSaved); // 回報結果。
+            return fallbackSaved > 0; // 有保存到人才算成功。
         }
 
         private static int GetIntMember(object obj, string name, int fallback)
@@ -941,17 +1011,17 @@ namespace MOD_nV039M
 
             if (playerCamp == 1)
             {
-                if (TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.enemy")) return true; // 玩家為攻方時，敵方是守方宗門；不能 fallback 到攻方，否則會抓自己人。
-                DeepProbeObject(defendWarData, "schoolWarData.defendWarData.enemy", 1); // 守方宗門已變成分舵時，改看守方戰爭資料。
-                if (TryRecoverFromSchoolWarUnitList(defendUnits, "schoolWarData.defendUnits.enemy")) return true; // 嘗試從守方參戰單位救援。
-                Log("[RECOVER] enemy defendSchool unavailable; refusing to fallback to attackSchool to avoid capturing own sect"); // 明確拒絕抓自己宗門。
+                if (TryRecoverFromSchoolWarUnitList(defendUnits, "schoolWarData.defendUnits.enemy")) return true; // v37：玩家為攻方時，敵方優先從守方參戰單位 UnitData.unit 抽 WorldUnitBase。
+                DeepProbeObject(defendWarData, "schoolWarData.defendWarData.enemy", 1); // 直接名單救不到時才深挖守方戰爭資料。
+                if (TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.enemy.fallback")) return true; // 最後才用宗門 buildData 備援，避免依賴已被改寫的 defendSchool。
+                Log("[RECOVER] enemy defendUnits unavailable; refusing to fallback to attackSchool to avoid capturing own sect"); // 明確拒絕抓自己宗門。
             }
             else if (playerCamp == 2)
             {
-                if (TryRecoverPrisonersFromCandidate(attackSchool, "schoolWarData.attackSchool.enemy")) return true; // 玩家為守方時，敵方是攻方宗門；不能 fallback 到守方。
-                DeepProbeObject(attackWarData, "schoolWarData.attackWarData.enemy", 1); // 攻方資料救不到時，深挖攻方戰爭資料。
-                if (TryRecoverFromSchoolWarUnitList(attackUnits, "schoolWarData.attackUnits.enemy")) return true; // 嘗試從攻方參戰單位救援。
-                Log("[RECOVER] enemy attackSchool unavailable; refusing to fallback to defendSchool to avoid capturing own sect"); // 明確拒絕抓自己宗門。
+                if (TryRecoverFromSchoolWarUnitList(attackUnits, "schoolWarData.attackUnits.enemy")) return true; // v37：玩家為守方時，敵方優先從攻方參戰單位 UnitData.unit 抽 WorldUnitBase。
+                DeepProbeObject(attackWarData, "schoolWarData.attackWarData.enemy", 1); // 直接名單救不到時才深挖攻方戰爭資料。
+                if (TryRecoverPrisonersFromCandidate(attackSchool, "schoolWarData.attackSchool.enemy.fallback")) return true; // 最後才用攻方宗門 buildData 備援。
+                Log("[RECOVER] enemy attackUnits unavailable; refusing to fallback to defendSchool to avoid capturing own sect"); // 明確拒絕抓自己宗門。
             }
             else
             {
