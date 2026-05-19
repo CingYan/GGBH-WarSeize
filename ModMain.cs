@@ -26,7 +26,7 @@ namespace MOD_nV039M
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v37";
+        private const string VERSION = "v39";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -86,6 +86,7 @@ namespace MOD_nV039M
                             BindingFlags.Public | BindingFlags.Static)));
                     Log("OK AttackSchool patch");
                 }
+
 
                 // Hook ArrestNpcCondition to force unitRight
                 try
@@ -1275,7 +1276,6 @@ namespace MOD_nV039M
                 Log("[ATTACK] drama FAIL: " + ex.Message);
             }
         }
-
 
         private static string ResolveModDirectory()
         {

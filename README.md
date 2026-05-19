@@ -28,7 +28,7 @@
 
 ### 操作流程
 1. 在 [Steam 工作坊訂閱本 MOD](https://steamcommunity.com/sharedfiles/filedetails/?id=3683459718)（或手動放入 `ModExportData/` 資料夾）
-2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v37) ===`
+2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v39) ===`
 3. 以宗主身份發起滅宗戰
 4. 打完宗門戰後，MOD 自動觸發處置序列
 5. 依照劇情選項決定每位戰俘的命運
@@ -118,7 +118,7 @@ DLL 注入解決了這些問題，實現了完全自動化。
 ### v1.1.12 (2026-05-02)
 - 🛟 依最新戰後 log，優先從 `schoolWarData.defendUnits[].unit` / `attackUnits[].unit` 直接抽 `WorldUnitBase`，再用 `allUnit` 對回 ID 並篩女性戰俘
 - 🛡️ 宗門 `buildData` 改為最後備援，避免守方宗門被改寫成分舵後依賴錯誤來源
-- 🏷️ 內部 MOD log 版號更新為 `v37`
+- 🏷️ 內部 MOD log 版號更新為 `v39`
 
 ### v1.1.11 (2026-05-02)
 - 🐛 移除 `UnityEngine.Object.FindObjectOfType(typeof(SchoolWar))`，避免 IL2CPP `System.Type` / `Il2CppSystem.Type` 編譯錯誤
