@@ -115,10 +115,16 @@ DLL 注入解決了這些問題，實現了完全自動化。
 
 ## 📝 更新日誌
 
+### v1.1.13 (2026-05-19)
+- 🐛 修正舊版挑釁物奇遇殘留導致進入非宣戰宗門時誤觸發宣戰劇情的問題
+- 🛡️ 舊宣戰奇遇與舊自動發放挑釁物事件已更換 ID，並將觸發率設為 0
+- 🔁 發布版使用穩定的 V39 rollback 程式碼，不包含曾導致遊戲無法啟動的 v40 OpenDrama patch
+- 🏷️ 內部 MOD log 版號維持 `v39`
+
 ### v1.1.12 (2026-05-02)
 - 🛟 依最新戰後 log，優先從 `schoolWarData.defendUnits[].unit` / `attackUnits[].unit` 直接抽 `WorldUnitBase`，再用 `allUnit` 對回 ID 並篩女性戰俘
 - 🛡️ 宗門 `buildData` 改為最後備援，避免守方宗門被改寫成分舵後依賴錯誤來源
-- 🏷️ 內部 MOD log 版號更新為 `v39`
+- 🏷️ 內部 MOD log 版號更新為 `v37`
 
 ### v1.1.11 (2026-05-02)
 - 🐛 移除 `UnityEngine.Object.FindObjectOfType(typeof(SchoolWar))`，避免 IL2CPP `System.Type` / `Il2CppSystem.Type` 編譯錯誤
