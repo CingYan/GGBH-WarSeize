@@ -28,7 +28,7 @@
 
 ### 操作流程
 1. 在 [Steam 工作坊訂閱本 MOD](https://steamcommunity.com/sharedfiles/filedetails/?id=3683459718)（或手動放入 `ModExportData/` 資料夾）
-2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v39) ===`
+2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v40) ===`
 3. 以宗主身份發起滅宗戰
 4. 打完宗門戰後，MOD 自動觸發處置序列
 5. 依照劇情選項決定每位戰俘的命運
@@ -114,6 +114,12 @@ DLL 注入解決了這些問題，實現了完全自動化。
 ---
 
 ## 📝 更新日誌
+
+### v1.1.14 (2026-05-28)
+- 🐛 修正玩家未當宗主、或過月 NPC 宗門行動呼叫 `SchoolWar.AttackSchool` 時誤觸發挑釁宣戰劇情
+- 🛡️ `AttackSchool` hook 現在必須驗證玩家是本宗宗主，且目標不是自己宗門才會開啟挑釁劇情
+- 🛑 完全停用資料端 legacy `openUI_School` / 過月自動奇遇，避免處置中或路過宗門重複彈劇情
+- 🏷️ 內部 MOD log 版號更新為 `v40`
 
 ### v1.1.13 (2026-05-19)
 - 🐛 修正舊版挑釁物奇遇殘留導致進入非宣戰宗門時誤觸發宣戰劇情的問題

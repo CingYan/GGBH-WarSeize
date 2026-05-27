@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.14] - 2026-05-28
+
+### Fixed
+- 修正玩家未當宗主、或遊戲過月 NPC 宗門行動呼叫 `SchoolWar.AttackSchool` 時，DLL prefix 仍誤開挑釁宣戰劇情的問題。
+- `AttackSchool` hook 現在必須確認玩家是本宗宗主，且目標不是自己宗門，才會保存戰俘名單與開啟挑釁劇情。
+- 完全停用資料端 legacy `openUI_School` / 過月自動奇遇，避免戰俘處置中或路過宗門時重複彈出舊劇情。
+
+### Changed
+- MOD log 版號更新為 `v40`。
+
 ## [1.1.13] - 2026-05-19
 
 ### Fixed

@@ -26,7 +26,7 @@ namespace MOD_nV039M
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v39";
+        private const string VERSION = "v40";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -430,12 +430,78 @@ namespace MOD_nV039M
             Log("[PROBE] === done ===");
         }
 
+        private static string GetPlayerUnitId()
+        {
+            try { return g.world.playerUnit.data.unitData.unitID; } catch { return null; }
+        }
+
+        private static string GetPlayerSchoolId()
+        {
+            try { return g.world.playerUnit.data.unitData.schoolID; } catch { return null; }
+        }
+
+        private static string GetTargetSchoolId(MapBuildSchool target)
+        {
+            if (target == null) return null;
+            try
+            {
+                object buildData = GetMemberValue(target, "buildData");
+                string id = GetStringMember(buildData, "id");
+                if (!string.IsNullOrEmpty(id)) return id;
+            }
+            catch { }
+            try { return GetStringMember(target, "id"); } catch { return null; }
+        }
+
+        private static bool IsPlayerSchoolMain()
+        {
+            string playerId = GetPlayerUnitId();
+            string schoolId = GetPlayerSchoolId();
+            if (string.IsNullOrEmpty(playerId) || string.IsNullOrEmpty(schoolId) || schoolId == "0" || schoolId == "-1")
+            {
+                Log("[ATTACK] skip: player has no valid school");
+                return false;
+            }
+
+            try
+            {
+                object playerData = g.world.playerUnit.data;
+                foreach (string schoolMember in new string[] { "school", "_school" })
+                {
+                    object schoolWrap = GetMemberValue(playerData, schoolMember);
+                    object buildData = GetMemberValue(schoolWrap, "buildData");
+                    string leader = GetStringMember(buildData, "npcSchoolMain");
+                    string id = GetStringMember(buildData, "id");
+                    if (id == schoolId && leader == playerId) return true;
+
+                    leader = GetStringMember(schoolWrap, "npcSchoolMain");
+                    id = GetStringMember(schoolWrap, "id");
+                    if (id == schoolId && leader == playerId) return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("[ATTACK] leader check failed: " + ex.Message);
+            }
+
+            Log("[ATTACK] skip: player is not verified school main");
+            return false;
+        }
+
         // =============================================================
-        // AttackSchool prefix — 回到手動加（v19.1 方式）
+        // AttackSchool prefix — 只攔截玩家身為宗主時的主動宣戰
         // =============================================================
         public static void Patch_AttackSchool(SchoolWar __instance, MapBuildSchool target)
         {
             cachedSchoolWar = __instance; // 宣戰 hook 取得 SchoolWar instance 時先快取，供讀檔 hint 或後續 debug 使用。
+            string playerSchoolId = GetPlayerSchoolId();
+            string targetId = GetTargetSchoolId(target);
+            if (!IsPlayerSchoolMain()) return; // 過月 NPC 宗門戰或玩家未當宗主時也會走 AttackSchool；這些不能彈挑釁劇情。
+            if (!string.IsNullOrEmpty(playerSchoolId) && !string.IsNullOrEmpty(targetId) && targetId == playerSchoolId)
+            {
+                Log("[ATTACK] skip: target is player's own school " + targetId);
+                return;
+            }
             if (attackHandled) return;
             attackHandled = true;
             Log("[ATTACK] triggered");
@@ -443,7 +509,7 @@ namespace MOD_nV039M
             savedPrisonerIds.Clear();
             targetSchoolID = null;
 
-            if (target == null) { OpenDeclareDrama(); return; }
+            if (target == null) { Log("[ATTACK] skip: target is null"); return; }
 
             try
             {
@@ -460,7 +526,7 @@ namespace MOD_nV039M
             }
             catch { }
 
-            if (targetSchoolID == null) { OpenDeclareDrama(); return; }
+            if (targetSchoolID == null) { Log("[ATTACK] skip: targetSchoolID unavailable"); return; }
 
             HashSet<string> allMembers = new HashSet<string>();
             try
