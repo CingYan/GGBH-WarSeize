@@ -28,7 +28,7 @@
 
 ### 操作流程
 1. 在 [Steam 工作坊訂閱本 MOD](https://steamcommunity.com/sharedfiles/filedetails/?id=3683459718)（或手動放入 `ModExportData/` 資料夾）
-2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v40) ===`
+2. 啟動遊戲，確認 MelonLoader console 顯示 `=== Init done (v41) ===`
 3. 以宗主身份發起滅宗戰
 4. 打完宗門戰後，MOD 自動觸發處置序列
 5. 依照劇情選項決定每位戰俘的命運
@@ -114,6 +114,12 @@ DLL 注入解決了這些問題，實現了完全自動化。
 ---
 
 ## 📝 更新日誌
+
+### v1.1.15 (2026-06-16)
+- 🐛 修正玩家作為守方且防守成功時，`SchoolWarClear` 仍誤觸發戰後戰俘處置序列的問題
+- 🛡️ 戰後處置現在會檢查 `schoolWarData.playerCamp`，只有玩家主動攻方戰爭才允許啟動處置
+- 🛑 讀檔 hint 不再為防守戰建立 `pre-war` 紀錄，避免總部或其他分舵支援弟子被誤當戰俘
+- 🏷️ 內部 MOD log 版號更新為 `v41`
 
 ### v1.1.14 (2026-05-28)
 - 🐛 修正玩家未當宗主、或過月 NPC 宗門行動呼叫 `SchoolWar.AttackSchool` 時誤觸發挑釁宣戰劇情

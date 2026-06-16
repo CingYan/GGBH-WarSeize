@@ -26,7 +26,7 @@ namespace MOD_nV039M
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v40";
+        private const string VERSION = "v41";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -1060,6 +1060,65 @@ namespace MOD_nV039M
             catch { return fallback; }
         }
 
+        private static object GetSchoolWarData(SchoolWar instance)
+        {
+            if (instance == null) return null;
+            return GetMemberValue(instance, "schoolWarData");
+        }
+
+        private static int GetPlayerCampFromSchoolWarData(object schoolWarData)
+        {
+            return GetIntMember(schoolWarData, "playerCamp", 0);
+        }
+
+        private static bool HasPendingAttackRecord()
+        {
+            try
+            {
+                LoadAllRecords();
+                WarRecord rec = GetCurrentRecord();
+                return rec != null
+                    && rec.phase == "pre-war"
+                    && rec.prisoners != null
+                    && rec.prisoners.Count > 0;
+            }
+            catch { return false; }
+        }
+
+        private static bool ShouldRunPostWarSequence(SchoolWar instance)
+        {
+            object schoolWarData = GetSchoolWarData(instance);
+            int playerCamp = GetPlayerCampFromSchoolWarData(schoolWarData);
+
+            if (playerCamp == 2)
+            {
+                Log("[CLEAR] skip: player was defender; post-war prisoner sequence only runs for player attacks");
+                return false;
+            }
+
+            if (playerCamp == 1) return true;
+
+            if (attackHandled || savedPrisonerIds.Count > 0 || HasPendingAttackRecord())
+            {
+                Log("[CLEAR] playerCamp unknown, but player attack record exists; allowing post-war sequence");
+                return true;
+            }
+
+            Log("[CLEAR] skip: no player attack evidence for this SchoolWarClear");
+            return false;
+        }
+
+        private static void ResetWarRuntimeState()
+        {
+            batchCount = 0;
+            postWarHandled = false;
+            attackHandled = false;
+            prisonerQueue.Clear();
+            prisonerIndex = 0;
+            currentPrisonerId = null;
+            sequenceRunning = false;
+        }
+
         private static bool TryRecoverFromSchoolWarDataSchools(object schoolWarData)
         {
             if (schoolWarData == null) return false; // 沒有 schoolWarData 就不能用宗門物件恢復。
@@ -1224,11 +1283,16 @@ namespace MOD_nV039M
                     return; // 沒有 instance 就無法抓 hint。
                 }
 
-                object schoolWarData = GetMemberValue(sw, "schoolWarData"); // 取得戰爭狀態資料。
+                object schoolWarData = GetSchoolWarData(sw); // 取得戰爭狀態資料。
                 if (schoolWarData == null)
                 {
                     Log("[WORLD-HINT] SchoolWar found but schoolWarData is null"); // 有元件但資料未建立。
                     return; // 無資料就停止。
+                }
+                if (GetPlayerCampFromSchoolWarData(schoolWarData) != 1)
+                {
+                    Log("[WORLD-HINT] skip: load-time SchoolWar is not a player attack"); // 防守戰不建立 pre-war hint，避免戰後誤觸處置。
+                    return; // 只保存玩家主動攻方戰爭。
                 }
 
                 HashSet<string> backup = new HashSet<string>(savedPrisonerIds); // 備份目前記憶體名單，避免掃描失敗清掉狀態。
@@ -1275,7 +1339,7 @@ namespace MOD_nV039M
             Log("[RECOVER] probing SchoolWar state"); // 標記開始從戰爭狀態救援。
             ProbeSchoolWarMembers(instance); // 先印出可疑欄位，讓下一輪 debug 有資料。
 
-            object schoolWarData = GetMemberValue(instance, "schoolWarData"); // v30 log 顯示 SchoolWar 內有 schoolWarData，v31 進一步深挖它。
+            object schoolWarData = GetSchoolWarData(instance); // v30 log 顯示 SchoolWar 內有 schoolWarData，v31 進一步深挖它。
             if (schoolWarData != null)
             {
                 DeepProbeObject(schoolWarData, "schoolWarData", 1); // 列出 schoolWarData 內部欄位與可能的 NPC id 清單。
@@ -1986,6 +2050,11 @@ namespace MOD_nV039M
             {
                 postWarHandled = true;
                 if (_instance == null) return;
+                if (!ShouldRunPostWarSequence(__instance))
+                {
+                    ResetWarRuntimeState();
+                    return;
+                }
 
                 if (savedPrisonerIds.Count == 0)
                 {
@@ -2065,13 +2134,7 @@ namespace MOD_nV039M
 
             if (batchCount > 2)
             {
-                batchCount = 0;
-                postWarHandled = false;
-                attackHandled = false;
-                prisonerQueue.Clear();
-                prisonerIndex = 0;
-                currentPrisonerId = null;
-                sequenceRunning = false;
+                ResetWarRuntimeState();
             }
         }
     }
