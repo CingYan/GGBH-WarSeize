@@ -22,11 +22,21 @@ namespace MOD_nV039M
         private const int ANGER_LUCK_ID = 1425424295;
         private const int DRAMA_INTRO = 1106494995;
         private const int DRAMA_DECLARE_1 = 813057337;
+        private const int DRAMA_BATCH_MENU = 1338401047;
         private const int DRAMA_LOOP = 917312688;
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v42";
+        private const int SLAVE_LUCK_ID = -1019384845;
+        private const int BONDAGE_LUCK_ID = -541655652;
+        private const int BATCH_OPTION_INDIVIDUAL = 434727936;
+        private const int BATCH_OPTION_RELEASE = 430728102;
+        private const int BATCH_OPTION_SLAVE = 430728103;
+        private const int BATCH_OPTION_BONDAGE = 430728104;
+        private const int BATCH_MODE_RELEASE = 1;
+        private const int BATCH_MODE_SLAVE = 2;
+        private const int BATCH_MODE_BONDAGE = 3;
+        private const string VERSION = "v43";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -1923,6 +1933,35 @@ namespace MOD_nV039M
             catch { }
         }
 
+        private static void AddPrisonerLuck(string uid, int luckId, string label)
+        {
+            if (string.IsNullOrEmpty(uid)) return;
+            try
+            {
+                WorldUnitBase unit = null;
+                try { unit = g.world.unit.allUnit[uid]; } catch { return; }
+                if (unit == null) return;
+
+                var pd = unit.data.unitData.propertyData;
+                if (HasLuckId(pd, luckId))
+                {
+                    Log("[BATCH-" + label + "] already has luck=" + luckId + " id=" + uid);
+                    return;
+                }
+
+                var luckData = new DataUnit.LuckData();
+                luckData.id = luckId;
+                luckData.duration = -1;
+                try { luckData.createTime = g.world.run.roundMonth; } catch { luckData.createTime = 1; }
+                unit.CreateLuck(luckData);
+                Log("[BATCH-" + label + "] CreateLuck " + luckId + ": " + pd.GetName() + " id=" + uid);
+            }
+            catch (Exception ex)
+            {
+                Log("[BATCH-" + label + "] AddPrisonerLuck fail id=" + uid + ": " + ex.Message);
+            }
+        }
+
         // =============================================================
         // ArrestNpcCondition prefix — 強制設置 unitRight
         // =============================================================
@@ -2002,6 +2041,146 @@ namespace MOD_nV039M
             catch { }
         }
 
+        private static int BuildPrisonerQueueFromSaved()
+        {
+            prisonerQueue.Clear();
+            prisonerIndex = 0;
+            currentPrisonerId = null;
+
+            foreach (string uid in savedPrisonerIds)
+            {
+                try
+                {
+                    WorldUnitBase unit = null;
+                    try { unit = g.world.unit.allUnit[uid]; } catch { continue; }
+                    if (unit == null) continue;
+                    prisonerQueue.Add(uid);
+                }
+                catch { }
+            }
+
+            Log("[SEQ] queue=" + prisonerQueue.Count);
+            return prisonerQueue.Count;
+        }
+
+        private static void MarkCurrentRecordDone()
+        {
+            var doneRec = GetCurrentRecordForSchool(targetSchoolID, true);
+            if (doneRec != null)
+            {
+                doneRec.phase = "done";
+                doneRec.index = prisonerQueue.Count;
+                SaveAllRecords();
+                Log("[FILE] record marked done");
+            }
+        }
+
+        private static void OpenFinishDrama()
+        {
+            try
+            {
+                DramaTool.OpenDrama(DRAMA_FINISH, new DramaData()
+                {
+                    unitLeft = g.world.playerUnit,
+                    onDramaEndCall = new Action(() =>
+                    {
+                        Log("[SEQ] finish drama ended");
+                    })
+                });
+                Log("[SEQ] finish drama " + DRAMA_FINISH + " OK");
+            }
+            catch (Exception ex)
+            {
+                Log("[SEQ] finish drama FAIL: " + ex.Message);
+            }
+        }
+
+        private static void ApplyBatchDisposition(int mode, string label)
+        {
+            sequenceRunning = false;
+            currentPrisonerId = null;
+            if (prisonerQueue.Count == 0)
+                BuildPrisonerQueueFromSaved();
+
+            int changed = 0;
+            int missing = 0;
+            foreach (string uid in prisonerQueue)
+            {
+                try
+                {
+                    WorldUnitBase unit = null;
+                    try { unit = g.world.unit.allUnit[uid]; } catch { }
+                    if (unit == null)
+                    {
+                        missing++;
+                        continue;
+                    }
+
+                    if (mode == BATCH_MODE_SLAVE)
+                        AddPrisonerLuck(uid, SLAVE_LUCK_ID, label);
+                    else if (mode == BATCH_MODE_BONDAGE)
+                        AddPrisonerLuck(uid, BONDAGE_LUCK_ID, label);
+
+                    RemoveAngerLuck(uid);
+                    changed++;
+                }
+                catch (Exception ex)
+                {
+                    Log("[BATCH-" + label + "] fail id=" + uid + ": " + ex.Message);
+                }
+            }
+
+            prisonerIndex = prisonerQueue.Count;
+            ClearNpcCache();
+            MarkCurrentRecordDone();
+            Log("[BATCH-" + label + "] done changed=" + changed + " missing=" + missing);
+            g.timer.Frame(new Action(() => { OpenFinishDrama(); }), 15, false);
+        }
+
+        private static void StartPrisonerChoiceSequence()
+        {
+            sequenceRunning = false;
+            currentPrisonerId = null;
+            if (BuildPrisonerQueueFromSaved() == 0)
+            {
+                Log("[BATCH] empty queue");
+                return;
+            }
+
+            SavePrisonerFile();
+            try
+            {
+                UICustomDramaDyn dramaDyn = new UICustomDramaDyn(DRAMA_BATCH_MENU);
+                dramaDyn.SetOptionCall(BATCH_OPTION_INDIVIDUAL, new Action(() =>
+                {
+                    Log("[BATCH] individual selected");
+                    StartPrisonerSequence();
+                }));
+                dramaDyn.SetOptionCall(BATCH_OPTION_RELEASE, new Action(() =>
+                {
+                    Log("[BATCH] release selected");
+                    ApplyBatchDisposition(BATCH_MODE_RELEASE, "RELEASE");
+                }));
+                dramaDyn.SetOptionCall(BATCH_OPTION_SLAVE, new Action(() =>
+                {
+                    Log("[BATCH] slave selected");
+                    ApplyBatchDisposition(BATCH_MODE_SLAVE, "SLAVE");
+                }));
+                dramaDyn.SetOptionCall(BATCH_OPTION_BONDAGE, new Action(() =>
+                {
+                    Log("[BATCH] bondage selected");
+                    ApplyBatchDisposition(BATCH_MODE_BONDAGE, "BONDAGE");
+                }));
+                dramaDyn.OpenUI();
+                Log("[BATCH] choice drama " + DRAMA_BATCH_MENU + " OK");
+            }
+            catch (Exception ex)
+            {
+                Log("[BATCH] choice drama FAIL, fallback individual: " + ex.Message);
+                StartPrisonerSequence();
+            }
+        }
+
         private static void OpenNextPrisonerDrama()
         {
             if (!sequenceRunning) return;
@@ -2012,31 +2191,8 @@ namespace MOD_nV039M
                 sequenceRunning = false;
                 currentPrisonerId = null;
 
-                // Mark record as done
-                var doneRec = GetCurrentRecordForSchool(targetSchoolID, true);
-                if (doneRec != null)
-                {
-                    doneRec.phase = "done";
-                    doneRec.index = prisonerQueue.Count;
-                    SaveAllRecords();
-                    Log("[FILE] record marked done");
-                }
-                try
-                {
-                    DramaTool.OpenDrama(DRAMA_FINISH, new DramaData()
-                    {
-                        unitLeft = g.world.playerUnit,
-                        onDramaEndCall = new Action(() =>
-                        {
-                            Log("[SEQ] finish drama ended");
-                        })
-                    });
-                    Log("[SEQ] finish drama " + DRAMA_FINISH + " OK");
-                }
-                catch (Exception ex)
-                {
-                    Log("[SEQ] finish drama FAIL: " + ex.Message);
-                }
+                MarkCurrentRecordDone();
+                OpenFinishDrama();
                 return;
             }
 
@@ -2088,24 +2244,7 @@ namespace MOD_nV039M
 
         private static void StartPrisonerSequence()
         {
-            prisonerQueue.Clear();
-            prisonerIndex = 0;
-            currentPrisonerId = null;
-
-            foreach (string uid in savedPrisonerIds)
-            {
-                try
-                {
-                    WorldUnitBase unit = null;
-                    try { unit = g.world.unit.allUnit[uid]; } catch { continue; }
-                    if (unit == null) continue;
-                    prisonerQueue.Add(uid);
-                }
-                catch { }
-            }
-
-            Log("[SEQ] queue=" + prisonerQueue.Count);
-            if (prisonerQueue.Count == 0)
+            if (BuildPrisonerQueueFromSaved() == 0)
             {
                 Log("[SEQ] empty queue");
                 return;
@@ -2214,8 +2353,8 @@ namespace MOD_nV039M
                         Log("[POST] record updated to post-war");
                     }
 
-                    Log("[SEQ] start direct prisoner sequence");
-                    StartPrisonerSequence();
+                    Log("[BATCH] start prisoner choice sequence");
+                    StartPrisonerChoiceSequence();
                 }
             }
 
