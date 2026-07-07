@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.1.16] - 2026-07-07
+
+### Fixed
+- 修正攻打分舵時，fallback 掃宗門 `buildData` 可能把總舵宗主納入戰俘名單的問題。
+- `AttackSchool` 宣戰階段現在優先從 `SchoolWar.schoolWarData` 的敵方參戰單位保存戰俘；只有參戰單位不可用時才 fallback 到宗門成員表。
+- 宗門 `buildData` fallback 會排除 `npcSchoolMain`，避免分舵戰誤抓總舵宗主。
+- 同月宣戰多個宗門時，戰後恢復會依目前敵方 `schoolID` 尋找對應的 `warhistory` 紀錄，避免不同敵宗紀錄互相覆蓋或串台。
+
+### Changed
+- MOD log 版號更新為 `v42`。
+
 ## [1.1.14] - 2026-05-28
 
 ### Fixed

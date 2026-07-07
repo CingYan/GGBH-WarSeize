@@ -26,7 +26,7 @@ namespace MOD_nV039M
         private const int DRAMA_PRISONER = 820728301;
         private const int DRAMA_FINISH = 1572050475;
         private const int PRISONER_TABLE_ID = -1642035727;
-        private const string VERSION = "v41";
+        private const string VERSION = "v42";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -526,49 +526,66 @@ namespace MOD_nV039M
             }
             catch { }
 
+            object schoolWarData = GetSchoolWarData(__instance);
+            string enemySchoolID = GetEnemySchoolIdFromSchoolWarData(schoolWarData);
+            if (!string.IsNullOrEmpty(enemySchoolID)) targetSchoolID = enemySchoolID;
+            if (string.IsNullOrEmpty(targetSchoolID) && !string.IsNullOrEmpty(targetId)) targetSchoolID = targetId;
+
             if (targetSchoolID == null) { Log("[ATTACK] skip: targetSchoolID unavailable"); return; }
+
+            if (schoolWarData != null)
+            {
+                try
+                {
+                    bool recoveredFromWarUnits = TryRecoverFromSchoolWarDataSchools(schoolWarData);
+                    if (recoveredFromWarUnits && savedPrisonerIds.Count > 0)
+                    {
+                        if (string.IsNullOrEmpty(targetSchoolID)) targetSchoolID = targetId;
+                        Log("[ATTACK] captured from SchoolWar units school=" + targetSchoolID + " saved=" + savedPrisonerIds.Count);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log("[ATTACK] SchoolWar unit capture failed: " + ex.Message);
+                    savedPrisonerIds.Clear();
+                }
+            }
 
             HashSet<string> allMembers = new HashSet<string>();
             try
             {
                 dynamic bd = target.buildData;
-                CollectList(bd.npcIn, allMembers);
-                CollectList(bd.npcElders, allMembers);
-                CollectList(bd.npcBigElders, allMembers);
-                CollectList(bd.npcInherit, allMembers);
-                try
-                {
-                    string leader = bd.npcSchoolMain;
-                    if (!string.IsNullOrEmpty(leader)) allMembers.Add(leader);
-                }
-                catch { }
+                if (savedPrisonerIds.Count == 0) CollectBuildDataMemberIds(bd, allMembers, false);
             }
             catch { }
 
-            Log("[ATTACK] total members=" + allMembers.Count);
+            Log("[ATTACK] fallback members=" + allMembers.Count);
 
             int femaleCount = 0;
             int angerAdded = 0;
 
-            foreach (string uid in allMembers)
+            if (savedPrisonerIds.Count == 0)
             {
-                try
+                foreach (string uid in allMembers)
                 {
-                    WorldUnitBase unit = null;
-                    try { unit = g.world.unit.allUnit[uid]; } catch { continue; }
-                    if (unit == null) continue;
+                    try
+                    {
+                        WorldUnitBase unit = null;
+                        try { unit = g.world.unit.allUnit[uid]; } catch { continue; }
+                        if (unit == null) continue;
 
-                    var pd = unit.data.unitData.propertyData;
-                    if ((int)pd.sex != 2) continue;
+                        var pd = unit.data.unitData.propertyData;
+                        if ((int)pd.sex != 2) continue;
 
-                    femaleCount++;
-                    savedPrisonerIds.Add(uid);
-                    string name = pd.GetName();
+                        femaleCount++;
+                        savedPrisonerIds.Add(uid);
+                        string name = pd.GetName();
 
-                    // 宣戰時不加氣運，只存 ID（氣運改在戰後加）
-                    Log("[SAVE] " + name + " id=" + uid);
+                        // 宣戰時不加氣運，只存 ID（氣運改在戰後加）
+                        Log("[SAVE] " + name + " id=" + uid);
+                    }
+                    catch { }
                 }
-                catch { }
             }
 
             Log("[ATTACK] females=" + femaleCount + " saved=" + savedPrisonerIds.Count);
@@ -668,6 +685,22 @@ namespace MOD_nV039M
             catch { }
         }
 
+        private static void CollectBuildDataMemberIds(object buildData, HashSet<string> target, bool includeLeader)
+        {
+            if (buildData == null || target == null) return;
+            CollectListMember(buildData, "npcIn", target);
+            CollectListMember(buildData, "npcElders", target);
+            CollectListMember(buildData, "npcBigElders", target);
+            CollectListMember(buildData, "npcInherit", target);
+
+            string leader = GetStringMember(buildData, "npcSchoolMain");
+            if (!string.IsNullOrEmpty(leader))
+            {
+                if (includeLeader) target.Add(leader);
+                else target.Remove(leader);
+            }
+        }
+
         private static int CollectFemalePrisonersFromMemberIds(HashSet<string> allMembers, string label)
         {
             int femaleCount = 0; // 實際可從 allUnit 找回的女性 NPC 數量。
@@ -696,17 +729,7 @@ namespace MOD_nV039M
             if (buildData == null) return false; // 沒有 buildData 就不能從宗門成員恢復。
 
             HashSet<string> allMembers = new HashSet<string>(); // 收集宗門全部可能成員。
-            CollectListMember(buildData, "npcIn", allMembers); // 內門/一般成員。
-            CollectListMember(buildData, "npcElders", allMembers); // 長老。
-            CollectListMember(buildData, "npcBigElders", allMembers); // 大長老。
-            CollectListMember(buildData, "npcInherit", allMembers); // 傳承/真傳成員。
-
-            try
-            {
-                string leader = GetStringMember(buildData, "npcSchoolMain"); // 宗主/門主 ID。
-                if (!string.IsNullOrEmpty(leader)) allMembers.Add(leader); // 門主也加入候選。
-            }
-            catch { }
+            CollectBuildDataMemberIds(buildData, allMembers, false); // fallback 不納入 npcSchoolMain，避免分舵戰誤抓總舵宗主。
 
             Log("[RECOVER] " + label + " memberCandidates=" + allMembers.Count); // 先看有沒有抓到宗門成員。
             if (allMembers.Count == 0) return false; // 沒成員就不是可用 buildData。
@@ -1071,12 +1094,53 @@ namespace MOD_nV039M
             return GetIntMember(schoolWarData, "playerCamp", 0);
         }
 
-        private static bool HasPendingAttackRecord()
+        private static string GetSchoolIdFromSchoolCandidate(object candidate)
+        {
+            if (candidate == null) return null;
+
+            string direct = GetStringMember(candidate, "id");
+            if (!string.IsNullOrEmpty(direct)) return direct;
+
+            direct = GetStringMember(candidate, "schoolID");
+            if (!string.IsNullOrEmpty(direct)) return direct;
+
+            string[] childNames = new string[] { "buildData", "BuildData", "data", "Data", "schoolData", "SchoolData", "mapBuildData", "MapBuildData", "build", "Build" };
+            foreach (string childName in childNames)
+            {
+                object child = GetMemberValue(candidate, childName);
+                string childID = GetStringMember(child, "id");
+                if (!string.IsNullOrEmpty(childID)) return childID;
+
+                childID = GetStringMember(child, "schoolID");
+                if (!string.IsNullOrEmpty(childID)) return childID;
+            }
+
+            return null;
+        }
+
+        private static string GetEnemySchoolIdFromSchoolWarData(object schoolWarData)
+        {
+            if (schoolWarData == null) return null;
+
+            int playerCamp = GetIntMember(schoolWarData, "playerCamp", 0);
+            object attackSchool = GetMemberValue(schoolWarData, "attackSchool");
+            object defendSchool = GetMemberValue(schoolWarData, "defendSchool");
+
+            if (playerCamp == 1) return GetSchoolIdFromSchoolCandidate(defendSchool);
+            if (playerCamp == 2) return GetSchoolIdFromSchoolCandidate(attackSchool);
+
+            bool defendDead = false;
+            try { defendDead = Convert.ToBoolean(GetMemberValue(schoolWarData, "defendSchoolDie")); } catch { }
+            if (defendDead) return GetSchoolIdFromSchoolCandidate(defendSchool);
+            return null;
+        }
+
+        private static bool HasPendingAttackRecord(string schoolID)
         {
             try
             {
                 LoadAllRecords();
-                WarRecord rec = GetCurrentRecord();
+                WarRecord rec = GetCurrentRecordForSchool(schoolID, string.IsNullOrEmpty(schoolID));
                 return rec != null
                     && rec.phase == "pre-war"
                     && rec.prisoners != null
@@ -1098,7 +1162,10 @@ namespace MOD_nV039M
 
             if (playerCamp == 1) return true;
 
-            if (attackHandled || savedPrisonerIds.Count > 0 || HasPendingAttackRecord())
+            string enemySchoolID = GetEnemySchoolIdFromSchoolWarData(schoolWarData);
+            if (!string.IsNullOrEmpty(enemySchoolID)) targetSchoolID = enemySchoolID;
+
+            if (attackHandled || savedPrisonerIds.Count > 0 || HasPendingAttackRecord(enemySchoolID))
             {
                 Log("[CLEAR] playerCamp unknown, but player attack record exists; allowing post-war sequence");
                 return true;
@@ -1137,6 +1204,7 @@ namespace MOD_nV039M
 
             if (playerCamp == 1)
             {
+                targetSchoolID = GetSchoolIdFromSchoolCandidate(defendSchool); // 記錄本場敵方宗門，用於多宗門同月時對應正確 warhistory record。
                 if (TryRecoverFromSchoolWarUnitList(defendUnits, "schoolWarData.defendUnits.enemy")) return true; // v37：玩家為攻方時，敵方優先從守方參戰單位 UnitData.unit 抽 WorldUnitBase。
                 DeepProbeObject(defendWarData, "schoolWarData.defendWarData.enemy", 1); // 直接名單救不到時才深挖守方戰爭資料。
                 if (TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.enemy.fallback")) return true; // 最後才用宗門 buildData 備援，避免依賴已被改寫的 defendSchool。
@@ -1144,6 +1212,7 @@ namespace MOD_nV039M
             }
             else if (playerCamp == 2)
             {
+                targetSchoolID = GetSchoolIdFromSchoolCandidate(attackSchool); // 記錄本場敵方宗門，用於多宗門同月時對應正確 warhistory record。
                 if (TryRecoverFromSchoolWarUnitList(attackUnits, "schoolWarData.attackUnits.enemy")) return true; // v37：玩家為守方時，敵方優先從攻方參戰單位 UnitData.unit 抽 WorldUnitBase。
                 DeepProbeObject(attackWarData, "schoolWarData.attackWarData.enemy", 1); // 直接名單救不到時才深挖攻方戰爭資料。
                 if (TryRecoverPrisonersFromCandidate(attackSchool, "schoolWarData.attackSchool.enemy.fallback")) return true; // 最後才用攻方宗門 buildData 備援。
@@ -1151,6 +1220,7 @@ namespace MOD_nV039M
             }
             else
             {
+                if (defendDead) targetSchoolID = GetSchoolIdFromSchoolCandidate(defendSchool); // 不明陣營時若守方已滅，仍記錄守方宗門 ID。
                 if (defendDead && TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.dead")) return true; // 不知道陣營時，優先抓已滅的守方。
                 if (TryRecoverFromSchoolWarUnitList(defendUnits, "schoolWarData.defendUnits.unknown")) return true; // 再試守方參戰單位。
                 Log("[RECOVER] unknown playerCamp; not trying attackSchool fallback automatically"); // 不明陣營時也避免亂抓攻方。
@@ -1421,15 +1491,15 @@ namespace MOD_nV039M
             return string.IsNullOrEmpty(currentDir) ? "." : currentDir; // 永遠回傳可組路徑的值，避免 GetSaveFilePath 產生 null。
         }
 
-        private static void RestorePrisonersFromRecordIfNeeded()
+        private static void RestorePrisonersFromRecordIfNeeded(string schoolID)
         {
             if (savedPrisonerIds.Count > 0) return; // 記憶體已有宣戰名單時不覆蓋，避免重複讀檔打亂當前流程。
 
             LoadAllRecords(); // 從 warhistory 讀回宣戰時保存的 NPC ID，這是戰後找人的主要來源。
-            var rec = GetCurrentRecord(); // 取最後一筆尚未完成的宗門戰紀錄。
+            var rec = GetCurrentRecordForSchool(schoolID, string.IsNullOrEmpty(schoolID)); // 多宗門同月時優先取當前敵宗紀錄。
             if (rec == null)
             {
-                Log("[RESTORE] no pending record at " + GetSaveFilePath()); // 找不到紀錄時把路徑打出來，方便確認是不是裝到新位置。
+                Log("[RESTORE] no pending record for school=" + (string.IsNullOrEmpty(schoolID) ? "unknown" : schoolID) + " at " + GetSaveFilePath()); // 找不到紀錄時把路徑打出來，方便確認是不是裝到新位置。
                 return; // 沒紀錄就交給後續 rebuild fallback。
             }
 
@@ -1648,6 +1718,21 @@ namespace MOD_nV039M
             return null;
         }
 
+        private static WarRecord GetCurrentRecordForSchool(string schoolID, bool allowFallback)
+        {
+            if (!string.IsNullOrEmpty(schoolID))
+            {
+                for (int i = allRecords.Count - 1; i >= 0; i--)
+                {
+                    if (allRecords[i].phase == "done") continue;
+                    if (allRecords[i].schoolID == schoolID) return allRecords[i];
+                }
+                Log("[FILE] no pending record matched school=" + schoolID);
+            }
+
+            return allowFallback ? GetCurrentRecord() : null;
+        }
+
         private static void PruneRecordsByGameTime(int currentGameTime)
         {
             // Remove records from the future (player loaded an older save)
@@ -1672,7 +1757,7 @@ namespace MOD_nV039M
         private static void SavePrisonerFile()
         {
             // Update current record's index and save
-            var rec = GetCurrentRecord();
+            var rec = GetCurrentRecordForSchool(targetSchoolID, true);
             if (rec != null)
             {
                 rec.index = prisonerIndex;
@@ -1928,7 +2013,7 @@ namespace MOD_nV039M
                 currentPrisonerId = null;
 
                 // Mark record as done
-                var doneRec = GetCurrentRecord();
+                var doneRec = GetCurrentRecordForSchool(targetSchoolID, true);
                 if (doneRec != null)
                 {
                     doneRec.phase = "done";
@@ -2059,7 +2144,9 @@ namespace MOD_nV039M
                 if (savedPrisonerIds.Count == 0)
                 {
                     Log("[CLEAR] restoring prisoner list from warhistory"); // 戰後優先讀宣戰時保存的名單，而不是直接用氣運硬掃。
-                    RestorePrisonersFromRecordIfNeeded(); // 解決換 MOD 安裝位置或 reload 後記憶體名單清空的問題。
+                    string enemySchoolID = GetEnemySchoolIdFromSchoolWarData(GetSchoolWarData(__instance));
+                    if (!string.IsNullOrEmpty(enemySchoolID)) targetSchoolID = enemySchoolID;
+                    RestorePrisonersFromRecordIfNeeded(enemySchoolID); // 解決換 MOD 安裝位置或 reload 後記憶體名單清空的問題。
                 }
 
                 if (savedPrisonerIds.Count == 0)
@@ -2118,7 +2205,7 @@ namespace MOD_nV039M
                 {
                     // Update record to post-war
                     LoadAllRecords();
-                    var rec = GetCurrentRecord();
+                    var rec = GetCurrentRecordForSchool(targetSchoolID, true);
                     if (rec != null)
                     {
                         rec.phase = "post-war";
