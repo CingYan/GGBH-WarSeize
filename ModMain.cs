@@ -52,6 +52,8 @@ namespace MOD_nV039M
         private const string MOD_DLL_NAME = "MOD_nV039M.dll"; // MOD 匯出後的 DLL 檔名，用於 Assembly.Location 為空時反查真實目錄。
         private static string modDir = null; // 目前 MOD DLL 所在目錄；啟動時動態解析，不再綁死 Steam 安裝路徑。
         private static SchoolWar cachedSchoolWar = null; // 最近一次 Harmony patch 傳入的 SchoolWar instance；SchoolWar 不是 UnityEngine.Object，不能用 FindObjectOfType 找。
+        private static readonly object memberCacheLock = new object();
+        private static readonly Dictionary<Type, Dictionary<string, MemberInfo>> memberCache = new Dictionary<Type, Dictionary<string, MemberInfo>>();
 
         private static void Log(string msg)
         {
@@ -642,36 +644,42 @@ namespace MOD_nV039M
 
             try
             {
-                FieldInfo f = t.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance); // 先找精確欄位。
+                MemberInfo member;
+                lock (memberCacheLock)
+                {
+                    Dictionary<string, MemberInfo> byName;
+                    if (!memberCache.TryGetValue(t, out byName))
+                    {
+                        byName = new Dictionary<string, MemberInfo>(StringComparer.OrdinalIgnoreCase);
+                        memberCache[t] = byName;
+                    }
+                    if (!byName.TryGetValue(name, out member))
+                    {
+                        FieldInfo field = t.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (field != null) member = field;
+                        else
+                        {
+                            PropertyInfo property = t.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                            if (property != null && property.GetIndexParameters().Length == 0) member = property;
+                            else
+                            {
+                                member = null;
+                                foreach (FieldInfo candidate in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                                    if (string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase)) { member = candidate; break; }
+                                if (member == null)
+                                    foreach (PropertyInfo candidate in t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                                        if (candidate.GetIndexParameters().Length == 0 && string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase)) { member = candidate; break; }
+                            }
+                        }
+                        byName[name] = member;
+                    }
+                }
+                FieldInfo f = member as FieldInfo;
                 if (f != null) return f.GetValue(obj); // 找到欄位就回傳值。
+                PropertyInfo p = member as PropertyInfo;
+                if (p != null) return p.GetValue(obj, null); // 只讀取非 indexer 屬性，避免觸發例外。
             }
             catch { }
-
-            try
-            {
-                PropertyInfo p = t.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance); // 再找精確屬性。
-                if (p != null && p.GetIndexParameters().Length == 0) return p.GetValue(obj, null); // 只讀取非 indexer 屬性，避免觸發例外。
-            }
-            catch { }
-
-            try
-            {
-                foreach (FieldInfo f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
-                {
-                    if (string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase)) return f.GetValue(obj); // IL2CPP wrapper 有時大小寫不同，補 case-insensitive 欄位搜尋。
-                }
-            }
-            catch { }
-
-            try
-            {
-                foreach (PropertyInfo p in t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
-                {
-                    if (p.GetIndexParameters().Length == 0 && string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p.GetValue(obj, null); // 補 case-insensitive 屬性搜尋。
-                }
-            }
-            catch { }
-
             return null; // 找不到就回傳 null。
         }
 
