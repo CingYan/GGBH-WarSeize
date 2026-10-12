@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.1.19] - 2026-10-12
+
+### Fixed
+- 宣戰 prefix 不再讀取可能殘留的 `SchoolWar` 狀態，避免同月多戰或讀檔時把上一場戰爭的宗門資料帶入本場。
+- 讀檔 hint 必須對應宣戰時保存的精確 `schoolID`，拒絕無目標的猜測式恢復與 `world-hint` 紀錄。
+- `SchoolWarClear` 沒有玩家攻擊證據時，即使 `playerCamp=1` 也不啟動戰俘流程；處置序列進行中忽略重複 clear。
+- 戰爭 runtime reset 會清除戰俘 ID、目標宗門與攻擊 key，避免跨場殘留。
+
+### Changed
+- MOD log 版號更新為 `v45`。
+
 ## [1.1.18] - 2026-10-12
 
 ### Fixed

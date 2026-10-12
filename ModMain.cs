@@ -37,7 +37,7 @@ namespace MOD_nV039M
         private const int BATCH_MODE_RELEASE = 1;
         private const int BATCH_MODE_SLAVE = 2;
         private const int BATCH_MODE_BONDAGE = 3;
-        private const string VERSION = "v44";
+        private const string VERSION = "v45";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -537,13 +537,9 @@ namespace MOD_nV039M
             }
             catch { }
 
-            object schoolWarData = GetSchoolWarData(__instance);
-            string enemySchoolID = GetEnemySchoolIdFromSchoolWarData(schoolWarData);
             // The method argument is the exact branch/sect selected by the player.
-            // Do not replace it with SchoolWar.defendSchool, which can be the parent
-            // sect after the game normalizes a branch war.
-            if (string.IsNullOrEmpty(targetSchoolID) && !string.IsNullOrEmpty(enemySchoolID))
-                targetSchoolID = enemySchoolID;
+            // Do not read SchoolWar here: this prefix runs before the game has
+            // populated it and it may still describe the previous war.
             if (string.IsNullOrEmpty(targetSchoolID) && !string.IsNullOrEmpty(targetId)) targetSchoolID = targetId;
 
             if (targetSchoolID == null) { Log("[ATTACK] skip: targetSchoolID unavailable"); return; }
@@ -562,9 +558,9 @@ namespace MOD_nV039M
             Log("[ATTACK] triggered key=" + attackKey);
 
             // The AttackSchool argument is the authoritative target, especially for
-            // branch wars.  Prefer its own member list before inspecting SchoolWar;
-            // SchoolWar's defendSchool may point at the parent sect after a branch
-            // war has been initialized.
+            // branch wars. Only use its own member list in this prefix. SchoolWar
+            // participant data is deferred until SchoolWarClear, after the game
+            // has initialized the current war.
             try
             {
                 dynamic targetBuildData = target.buildData;
@@ -576,25 +572,6 @@ namespace MOD_nV039M
             catch (Exception ex)
             {
                 Log("[ATTACK] exact target capture failed: " + ex.Message);
-            }
-
-            if (schoolWarData != null)
-            {
-                try
-                {
-                    bool recoveredFromWarUnits = savedPrisonerIds.Count == 0
-                        && TryRecoverFromSchoolWarDataSchools(schoolWarData, targetSchoolID);
-                    if (recoveredFromWarUnits && savedPrisonerIds.Count > 0)
-                    {
-                        if (string.IsNullOrEmpty(targetSchoolID)) targetSchoolID = targetId;
-                        Log("[ATTACK] captured from SchoolWar units school=" + targetSchoolID + " saved=" + savedPrisonerIds.Count);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log("[ATTACK] SchoolWar unit capture failed: " + ex.Message);
-                    savedPrisonerIds.Clear();
-                }
             }
 
             HashSet<string> allMembers = new HashSet<string>();
@@ -1242,12 +1219,23 @@ namespace MOD_nV039M
                 return false;
             }
 
-            if (playerCamp == 1) return true;
-
             string enemySchoolID = GetEnemySchoolIdFromSchoolWarData(schoolWarData);
             if (!string.IsNullOrEmpty(enemySchoolID)) targetSchoolID = enemySchoolID;
 
-            if (attackHandled || savedPrisonerIds.Count > 0 || HasPendingAttackRecord(enemySchoolID))
+            bool hasAttackEvidence = attackHandled || savedPrisonerIds.Count > 0 || HasPendingAttackRecord(enemySchoolID);
+            if (playerCamp == 1 && hasAttackEvidence)
+            {
+                Log("[CLEAR] playerCamp=1 and player attack evidence exists; allowing post-war sequence");
+                return true;
+            }
+
+            if (playerCamp == 1)
+            {
+                Log("[CLEAR] playerCamp=1 but no tracked player attack; refusing unscoped post-war sequence");
+                return false;
+            }
+
+            if (hasAttackEvidence)
             {
                 Log("[CLEAR] playerCamp unknown, but player attack record exists; allowing post-war sequence");
                 return true;
@@ -1262,6 +1250,9 @@ namespace MOD_nV039M
             batchCount = 0;
             postWarHandled = false;
             attackHandled = false;
+            savedPrisonerIds.Clear();
+            targetSchoolID = null;
+            lastAttackKey = null;
             prisonerQueue.Clear();
             prisonerIndex = 0;
             currentPrisonerId = null;
@@ -1435,6 +1426,16 @@ namespace MOD_nV039M
                     return; // 避免讀檔掃描覆寫宣戰當下保存的正確名單。
                 }
 
+                // A load-time SchoolWar object alone cannot identify the target:
+                // it may still be a cached object from another sect. Only enrich
+                // an exact pending record created by AttackSchool.
+                string expectedSchoolID = existing == null ? null : existing.schoolID;
+                if (string.IsNullOrEmpty(expectedSchoolID))
+                {
+                    Log("[WORLD-HINT] skip: no exact pending target record");
+                    return;
+                }
+
                 SchoolWar sw = FindActiveSchoolWar(); // 嘗試找場景中的 SchoolWar。
                 if (sw == null)
                 {
@@ -1457,10 +1458,10 @@ namespace MOD_nV039M
                 HashSet<string> backup = new HashSet<string>(savedPrisonerIds); // 備份目前記憶體名單，避免掃描失敗清掉狀態。
                 string backupSchool = targetSchoolID; // 備份目前宗門 ID。
                 savedPrisonerIds.Clear(); // 讀檔 hint 只保存這次掃到的敵方名單。
-                targetSchoolID = null; // 讓本次掃描重新決定敵方宗門 ID。
+                targetSchoolID = expectedSchoolID; // 只能沿用宣戰時保存的精確目標。
 
                 DeepProbeObject(schoolWarData, "worldHint.schoolWarData", 1); // 讀檔時間點也列出戰爭狀態，方便和戰後 Clear 對照。
-                bool ok = TryRecoverFromSchoolWarDataSchools(schoolWarData); // 用同一套敵方判斷抓取讀檔時的敵方名單。
+                bool ok = TryRecoverFromSchoolWarDataSchools(schoolWarData, expectedSchoolID); // 只接受宣戰紀錄指定的目標宗門。
 
                 if (!ok || savedPrisonerIds.Count == 0)
                 {
@@ -1471,14 +1472,16 @@ namespace MOD_nV039M
                 }
 
                 LoadAllRecords(); // 準備寫入 hint record 前重新讀檔。
-                var rec = GetCurrentRecord(); // 若有空 pending record，直接補上；否則新增。
-                if (rec == null || rec.prisoners == null || rec.prisoners.Count > 0)
+                var rec = GetCurrentRecordForSchool(expectedSchoolID, false); // 只補宣戰時建立的 pending record，不建立無法追溯來源的新紀錄。
+                if (rec == null)
                 {
-                    rec = new WarRecord(); // 建立讀檔 hint 紀錄。
-                    allRecords.Add(rec); // 加入歷史紀錄。
+                    Log("[WORLD-HINT] recovered list but pending target record disappeared; refusing to save");
+                    savedPrisonerIds = backup;
+                    targetSchoolID = backupSchool;
+                    return;
                 }
 
-                rec.schoolID = string.IsNullOrEmpty(targetSchoolID) ? "world-hint" : targetSchoolID; // 保存讀檔時判定的敵方宗門 ID。
+                rec.schoolID = expectedSchoolID; // 保留宣戰時的精確目標宗門 ID。
                 rec.phase = "pre-war"; // 讀檔 hint 等同宣戰後、戰前紀錄，讓 SchoolWarClear 可直接 restore。
                 rec.gameTime = GetGameTime(); // 保存目前遊戲時間。
                 rec.index = 0; // 尚未開始處理戰俘。
@@ -2458,9 +2461,13 @@ namespace MOD_nV039M
                 }
             }
 
-            if (batchCount > 2)
+            if (batchCount > 2 && !sequenceRunning)
             {
                 ResetWarRuntimeState();
+            }
+            else if (batchCount > 2)
+            {
+                Log("[CLEAR] repeated clear ignored while prisoner sequence is active");
             }
         }
     }
