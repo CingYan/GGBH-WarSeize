@@ -17,6 +17,7 @@ namespace MOD_nV039M
         private static long lastBatchSec = 0;
         private static int batchCount = 0;
         private static bool attackHandled = false;
+        private static string lastAttackKey = null;
         private static bool openDramaPatched = false;
 
         private const int ANGER_LUCK_ID = 1425424295;
@@ -36,7 +37,7 @@ namespace MOD_nV039M
         private const int BATCH_MODE_RELEASE = 1;
         private const int BATCH_MODE_SLAVE = 2;
         private const int BATCH_MODE_BONDAGE = 3;
-        private const string VERSION = "v43";
+        private const string VERSION = "v44";
 
         private static HashSet<string> savedPrisonerIds = new HashSet<string>();
         private static List<string> prisonerQueue = new List<string>();
@@ -67,6 +68,7 @@ namespace MOD_nV039M
             lastBatchSec = 0;
             batchCount = 0;
             attackHandled = false;
+            lastAttackKey = null;
             prisonerQueue.Clear();
             prisonerIndex = 0;
             currentPrisonerId = null;
@@ -158,6 +160,7 @@ namespace MOD_nV039M
             postWarHandled = false;
             batchCount = 0;
             attackHandled = false;
+            lastAttackKey = null;
             prisonerQueue.Clear();
             prisonerIndex = 0;
             currentPrisonerId = null;
@@ -514,10 +517,6 @@ namespace MOD_nV039M
                 Log("[ATTACK] skip: target is player's own school " + targetId);
                 return;
             }
-            if (attackHandled) return;
-            attackHandled = true;
-            Log("[ATTACK] triggered");
-
             savedPrisonerIds.Clear();
             targetSchoolID = null;
 
@@ -540,16 +539,51 @@ namespace MOD_nV039M
 
             object schoolWarData = GetSchoolWarData(__instance);
             string enemySchoolID = GetEnemySchoolIdFromSchoolWarData(schoolWarData);
-            if (!string.IsNullOrEmpty(enemySchoolID)) targetSchoolID = enemySchoolID;
+            // The method argument is the exact branch/sect selected by the player.
+            // Do not replace it with SchoolWar.defendSchool, which can be the parent
+            // sect after the game normalizes a branch war.
+            if (string.IsNullOrEmpty(targetSchoolID) && !string.IsNullOrEmpty(enemySchoolID))
+                targetSchoolID = enemySchoolID;
             if (string.IsNullOrEmpty(targetSchoolID) && !string.IsNullOrEmpty(targetId)) targetSchoolID = targetId;
 
             if (targetSchoolID == null) { Log("[ATTACK] skip: targetSchoolID unavailable"); return; }
+
+            // AttackSchool can be called more than once for the same target while the
+            // game is building the same war.  Do not suppress a different target in
+            // the same month: each war needs its own persisted prisoner list.
+            string attackKey = targetSchoolID + "|" + GetGameTime();
+            if (attackHandled && lastAttackKey == attackKey)
+            {
+                Log("[ATTACK] duplicate hook ignored key=" + attackKey);
+                return;
+            }
+            attackHandled = true;
+            lastAttackKey = attackKey;
+            Log("[ATTACK] triggered key=" + attackKey);
+
+            // The AttackSchool argument is the authoritative target, especially for
+            // branch wars.  Prefer its own member list before inspecting SchoolWar;
+            // SchoolWar's defendSchool may point at the parent sect after a branch
+            // war has been initialized.
+            try
+            {
+                dynamic targetBuildData = target.buildData;
+                HashSet<string> exactMembers = new HashSet<string>();
+                CollectBuildDataMemberIds(targetBuildData, exactMembers, false);
+                int exactSaved = CollectFemalePrisonersFromMemberIds(exactMembers, "attack.targetBuildData");
+                Log("[ATTACK] exact target members=" + exactMembers.Count + " saved=" + exactSaved);
+            }
+            catch (Exception ex)
+            {
+                Log("[ATTACK] exact target capture failed: " + ex.Message);
+            }
 
             if (schoolWarData != null)
             {
                 try
                 {
-                    bool recoveredFromWarUnits = TryRecoverFromSchoolWarDataSchools(schoolWarData);
+                    bool recoveredFromWarUnits = savedPrisonerIds.Count == 0
+                        && TryRecoverFromSchoolWarDataSchools(schoolWarData, targetSchoolID);
                     if (recoveredFromWarUnits && savedPrisonerIds.Count > 0)
                     {
                         if (string.IsNullOrEmpty(targetSchoolID)) targetSchoolID = targetId;
@@ -1033,7 +1067,25 @@ namespace MOD_nV039M
             return null; // 無法解析可持久化 ID。
         }
 
-        private static bool TryRecoverFromSchoolWarUnitList(object listObj, string label)
+        private static bool IsUnitFromExpectedSchool(WorldUnitBase unit, string expectedSchoolID)
+        {
+            if (unit == null || string.IsNullOrEmpty(expectedSchoolID)) return true;
+            try { return unit.data.unitData.schoolID == expectedSchoolID; }
+            catch { return false; }
+        }
+
+        private static bool IsUnitIdFromExpectedSchool(string uid, string expectedSchoolID)
+        {
+            if (string.IsNullOrEmpty(expectedSchoolID)) return true;
+            try
+            {
+                WorldUnitBase unit = g.world.unit.allUnit[uid];
+                return IsUnitFromExpectedSchool(unit, expectedSchoolID);
+            }
+            catch { return false; }
+        }
+
+        private static bool TryRecoverFromSchoolWarUnitList(object listObj, string label, string expectedSchoolID = null)
         {
             if (listObj == null) return false; // 沒清單就不能恢復。
             HashSet<string> directUnitIds = new HashSet<string>(); // v37：從 UnitData.unit 直接抽出的 WorldUnitBase ID。
@@ -1053,6 +1105,11 @@ namespace MOD_nV039M
                         Log("[PROBE-UNITLIST] " + label + "[" + i + "] type=" + item.GetType().Name + " value=" + item.ToString()); // 印出項目型別。
 
                         WorldUnitBase directUnit = TryExtractWorldUnitBase(item, 3); // v37：優先從 defendUnits[].unit / attackUnits[].unit 抽 WorldUnitBase。
+                        if (directUnit != null && !IsUnitFromExpectedSchool(directUnit, expectedSchoolID))
+                        {
+                            Log("[RECOVER] " + label + " rejected unit outside expected school=" + expectedSchoolID);
+                            continue;
+                        }
                         string directUid = TryResolveWorldUnitId(directUnit); // 將 WorldUnitBase 轉成可寫入 warhistory 的 runtime id。
                         if (!string.IsNullOrEmpty(directUid))
                         {
@@ -1062,7 +1119,7 @@ namespace MOD_nV039M
 
                         DeepProbeObject(item, label + "[" + i + "]", 1); // 直接抽不到才深挖 UnitData 欄位，保留下一輪 debug 資料。
                         string uid = TryExtractUnitId(item, 3); // 舊版備援：嘗試自動抽出角色 ID。
-                        if (!string.IsNullOrEmpty(uid)) fallbackIds.Add(uid); // 加入備援候選。
+                        if (!string.IsNullOrEmpty(uid) && IsUnitIdFromExpectedSchool(uid, expectedSchoolID)) fallbackIds.Add(uid); // 加入備援候選。
                     }
                     catch { }
                 }
@@ -1136,6 +1193,13 @@ namespace MOD_nV039M
             return null;
         }
 
+        private static bool IsExpectedSchoolCandidate(object candidate, string expectedSchoolID)
+        {
+            if (string.IsNullOrEmpty(expectedSchoolID)) return true;
+            string candidateID = GetSchoolIdFromSchoolCandidate(candidate);
+            return !string.IsNullOrEmpty(candidateID) && candidateID == expectedSchoolID;
+        }
+
         private static string GetEnemySchoolIdFromSchoolWarData(object schoolWarData)
         {
             if (schoolWarData == null) return null;
@@ -1204,7 +1268,7 @@ namespace MOD_nV039M
             sequenceRunning = false;
         }
 
-        private static bool TryRecoverFromSchoolWarDataSchools(object schoolWarData)
+        private static bool TryRecoverFromSchoolWarDataSchools(object schoolWarData, string expectedSchoolID = null)
         {
             if (schoolWarData == null) return false; // 沒有 schoolWarData 就不能用宗門物件恢復。
 
@@ -1222,25 +1286,32 @@ namespace MOD_nV039M
 
             if (playerCamp == 1)
             {
-                targetSchoolID = GetSchoolIdFromSchoolCandidate(defendSchool); // 記錄本場敵方宗門，用於多宗門同月時對應正確 warhistory record。
-                if (TryRecoverFromSchoolWarUnitList(defendUnits, "schoolWarData.defendUnits.enemy")) return true; // v37：玩家為攻方時，敵方優先從守方參戰單位 UnitData.unit 抽 WorldUnitBase。
+                if (string.IsNullOrEmpty(expectedSchoolID)) targetSchoolID = GetSchoolIdFromSchoolCandidate(defendSchool); // 記錄本場敵方宗門。
+                if (TryRecoverFromSchoolWarUnitList(defendUnits, "schoolWarData.defendUnits.enemy", expectedSchoolID)) return true; // 只接受本場目標宗門的參戰單位。
+                if (!IsExpectedSchoolCandidate(defendSchool, expectedSchoolID)) Log("[RECOVER] rejected defendSchool candidate; expected=" + expectedSchoolID);
                 DeepProbeObject(defendWarData, "schoolWarData.defendWarData.enemy", 1); // 直接名單救不到時才深挖守方戰爭資料。
-                if (TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.enemy.fallback")) return true; // 最後才用宗門 buildData 備援，避免依賴已被改寫的 defendSchool。
+                if (IsExpectedSchoolCandidate(defendSchool, expectedSchoolID)
+                    && TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.enemy.fallback")) return true; // 最後才用同一目標的 buildData 備援。
                 Log("[RECOVER] enemy defendUnits unavailable; refusing to fallback to attackSchool to avoid capturing own sect"); // 明確拒絕抓自己宗門。
             }
             else if (playerCamp == 2)
             {
-                targetSchoolID = GetSchoolIdFromSchoolCandidate(attackSchool); // 記錄本場敵方宗門，用於多宗門同月時對應正確 warhistory record。
-                if (TryRecoverFromSchoolWarUnitList(attackUnits, "schoolWarData.attackUnits.enemy")) return true; // v37：玩家為守方時，敵方優先從攻方參戰單位 UnitData.unit 抽 WorldUnitBase。
+                if (string.IsNullOrEmpty(expectedSchoolID)) targetSchoolID = GetSchoolIdFromSchoolCandidate(attackSchool); // 記錄本場敵方宗門。
+                if (TryRecoverFromSchoolWarUnitList(attackUnits, "schoolWarData.attackUnits.enemy", expectedSchoolID)) return true; // 只接受本場目標宗門的參戰單位。
+                if (!IsExpectedSchoolCandidate(attackSchool, expectedSchoolID)) Log("[RECOVER] rejected attackSchool candidate; expected=" + expectedSchoolID);
                 DeepProbeObject(attackWarData, "schoolWarData.attackWarData.enemy", 1); // 直接名單救不到時才深挖攻方戰爭資料。
-                if (TryRecoverPrisonersFromCandidate(attackSchool, "schoolWarData.attackSchool.enemy.fallback")) return true; // 最後才用攻方宗門 buildData 備援。
+                if (IsExpectedSchoolCandidate(attackSchool, expectedSchoolID)
+                    && TryRecoverPrisonersFromCandidate(attackSchool, "schoolWarData.attackSchool.enemy.fallback")) return true; // 最後才用同一目標的 buildData 備援。
                 Log("[RECOVER] enemy attackUnits unavailable; refusing to fallback to defendSchool to avoid capturing own sect"); // 明確拒絕抓自己宗門。
             }
             else
             {
-                if (defendDead) targetSchoolID = GetSchoolIdFromSchoolCandidate(defendSchool); // 不明陣營時若守方已滅，仍記錄守方宗門 ID。
-                if (defendDead && TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.dead")) return true; // 不知道陣營時，優先抓已滅的守方。
-                if (TryRecoverFromSchoolWarUnitList(defendUnits, "schoolWarData.defendUnits.unknown")) return true; // 再試守方參戰單位。
+                if (defendDead && IsExpectedSchoolCandidate(defendSchool, expectedSchoolID))
+                {
+                    if (string.IsNullOrEmpty(expectedSchoolID)) targetSchoolID = GetSchoolIdFromSchoolCandidate(defendSchool); // 不明陣營時若守方已滅，仍記錄守方宗門 ID。
+                    if (TryRecoverPrisonersFromCandidate(defendSchool, "schoolWarData.defendSchool.dead")) return true; // 優先抓同一目標的守方。
+                }
+                if (TryRecoverFromSchoolWarUnitList(defendUnits, "schoolWarData.defendUnits.unknown", expectedSchoolID)) return true; // 再試同一目標的守方參戰單位。
                 Log("[RECOVER] unknown playerCamp; not trying attackSchool fallback automatically"); // 不明陣營時也避免亂抓攻方。
             }
 
@@ -1427,49 +1498,39 @@ namespace MOD_nV039M
             Log("[RECOVER] probing SchoolWar state"); // 標記開始從戰爭狀態救援。
             ProbeSchoolWarMembers(instance); // 先印出可疑欄位，讓下一輪 debug 有資料。
 
+            if (string.IsNullOrEmpty(targetSchoolID))
+            {
+                LoadAllRecords();
+                WarRecord pending = GetCurrentRecord();
+                if (pending != null) targetSchoolID = pending.schoolID;
+            }
+
             object schoolWarData = GetSchoolWarData(instance); // v30 log 顯示 SchoolWar 內有 schoolWarData，v31 進一步深挖它。
             if (schoolWarData != null)
             {
                 DeepProbeObject(schoolWarData, "schoolWarData", 1); // 列出 schoolWarData 內部欄位與可能的 NPC id 清單。
-                if (TryRecoverFromSchoolWarDataSchools(schoolWarData)) Log("[RECOVER] recovered from schoolWarData school object"); // v32：直接從 attackSchool/defendSchool 的 buildData 救援。
-                if (savedPrisonerIds.Count == 0 && TryRecoverFromAnyStringLists(schoolWarData, "schoolWarData")) Log("[RECOVER] recovered from schoolWarData string list"); // 宗門物件救不到時，再嘗試可疑字串清單。
+                if (!string.IsNullOrEmpty(targetSchoolID)
+                    && TryRecoverFromSchoolWarDataSchools(schoolWarData, targetSchoolID))
+                    Log("[RECOVER] recovered from schoolWarData school object"); // v44：只接受已知目標宗門，禁止跨宗門字串清單 fallback。
+                else if (string.IsNullOrEmpty(targetSchoolID))
+                    Log("[RECOVER] no persisted target school; refusing unscoped SchoolWar recovery");
             }
 
-            Type t = instance.GetType(); // 取得 SchoolWar 型別。
-            foreach (FieldInfo f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
-            {
-                try
-                {
-                    object val = f.GetValue(instance); // 讀取每個欄位作為候選。
-                    if (TryRecoverPrisonersFromCandidate(val, "field." + f.Name)) break; // 找到可用宗門資料就停止。
-                }
-                catch { }
-            }
-
-            if (savedPrisonerIds.Count == 0)
-            {
-                foreach (PropertyInfo p in t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
-                {
-                    try
-                    {
-                        if (p.GetIndexParameters().Length > 0) continue; // 跳過 indexer。
-                        object val = p.GetValue(instance, null); // 讀取每個屬性作為候選。
-                        if (TryRecoverPrisonersFromCandidate(val, "prop." + p.Name)) break; // 找到可用宗門資料就停止。
-                    }
-                    catch { }
-                }
-            }
+            // Do not scan arbitrary SchoolWar fields here.  They may contain cached
+            // members from unrelated sects; accepting the first matching list was
+            // the direct cause of cross-sect prisoners.
 
             if (savedPrisonerIds.Count > 0)
             {
                 LoadAllRecords(); // 將救回名單寫入歷史檔，避免同一輪後續又遺失。
-                var rec = new WarRecord(); // 建立補救紀錄。
+                var rec = GetCurrentRecordForSchool(targetSchoolID, false);
+                if (rec == null) rec = new WarRecord(); // 沒有對應宣戰紀錄時才建立補救紀錄。
                 rec.schoolID = string.IsNullOrEmpty(targetSchoolID) ? "recovered" : targetSchoolID; // 有宗門 ID 就寫宗門 ID，否則標 recovered。
                 rec.phase = "post-war"; // 已經在戰後 CLEAR，因此直接標 post-war。
                 rec.gameTime = GetGameTime(); // 記錄目前遊戲時間。
                 rec.index = 0; // 從第一位戰俘開始處理。
                 rec.prisoners = new List<string>(savedPrisonerIds); // 保存救回名單。
-                allRecords.Add(rec); // 加入紀錄。
+                if (!allRecords.Contains(rec)) allRecords.Add(rec); // 只在沒有既有對應紀錄時加入。
                 SaveAllRecords(); // 寫檔。
                 Log("[RECOVER] record added from SchoolWar state saved=" + savedPrisonerIds.Count); // 回報補救成功。
             }
@@ -2288,12 +2349,29 @@ namespace MOD_nV039M
                     return;
                 }
 
+                // SchoolWarClear can fire again after a save/load or a month tick.
+                // A record already in post-war/done state means this battle was
+                // handled; do not reopen the prisoner sequence.
+                string clearEnemySchoolID = GetEnemySchoolIdFromSchoolWarData(GetSchoolWarData(__instance));
+                if (string.IsNullOrEmpty(targetSchoolID) && !string.IsNullOrEmpty(clearEnemySchoolID))
+                    targetSchoolID = clearEnemySchoolID;
+                LoadAllRecords();
+                WarRecord existingClearRecord = GetCurrentRecordForSchool(targetSchoolID, false);
+                if (existingClearRecord != null && existingClearRecord.phase != "pre-war")
+                {
+                    Log("[CLEAR] duplicate/late clear ignored phase=" + existingClearRecord.phase
+                        + " school=" + existingClearRecord.schoolID);
+                    ResetWarRuntimeState();
+                    return;
+                }
+
                 if (savedPrisonerIds.Count == 0)
                 {
                     Log("[CLEAR] restoring prisoner list from warhistory"); // 戰後優先讀宣戰時保存的名單，而不是直接用氣運硬掃。
-                    string enemySchoolID = GetEnemySchoolIdFromSchoolWarData(GetSchoolWarData(__instance));
-                    if (!string.IsNullOrEmpty(enemySchoolID)) targetSchoolID = enemySchoolID;
-                    RestorePrisonersFromRecordIfNeeded(enemySchoolID); // 解決換 MOD 安裝位置或 reload 後記憶體名單清空的問題。
+                    string enemySchoolID = clearEnemySchoolID;
+                    if (string.IsNullOrEmpty(targetSchoolID) && !string.IsNullOrEmpty(enemySchoolID))
+                        targetSchoolID = enemySchoolID;
+                    RestorePrisonersFromRecordIfNeeded(targetSchoolID); // 解決換 MOD 安裝位置或 reload 後記憶體名單清空的問題；保留 AttackSchool 的精確分舵 ID。
                 }
 
                 if (savedPrisonerIds.Count == 0)
@@ -2304,8 +2382,22 @@ namespace MOD_nV039M
 
                 if (savedPrisonerIds.Count == 0)
                 {
-                    Log("[CLEAR] rebuilding prisoner list fallback"); // SchoolWar 狀態也救不到時，才進入最後 fallback 掃描。
-                    RebuildPrisonerList(); // fallback 保守掃描，避免亂抓非戰俘 NPC。
+                    if (!string.IsNullOrEmpty(targetSchoolID))
+                    {
+                        Log("[CLEAR] exact state unavailable; restricted schoolID recovery=" + targetSchoolID);
+                        TryRecoverPrisonersBySchoolID(targetSchoolID, "clear.schoolID");
+                    }
+                    else
+                    {
+                        Log("[CLEAR] no exact target school; refusing global prisoner scan");
+                    }
+                }
+
+                if (savedPrisonerIds.Count == 0)
+                {
+                    Log("[CLEAR] no verified prisoners; aborting instead of capturing unrelated NPCs");
+                    ResetWarRuntimeState();
+                    return;
                 }
 
                 int found = 0;
